@@ -56,25 +56,12 @@ case "${1:-}" in
 esac
 
 TAB=$(printf '\t')
-
-# gradient REECE.IS wordmark, printed ABOVE fzf so it keeps full truecolor
-# (fzf --header would flatten it to one color). fzf --height opens below and
-# never repaints these rows.
-L1=$'\033[38;2;0;255;200m'; L2=$'\033[38;2;0;235;225m'; L3=$'\033[38;2;40;210;250m'
-L4=$'\033[38;2;90;190;255m'; L5=$'\033[38;2;40;210;250m'; X=$'\033[0m'
-printf '\n'
-printf '  %s████ ████ ████ ████ ████     ███ ████%s\n' "$L1" "$X"
-printf '  %s█  █ █    █    █    █          █  █   %s\n' "$L2" "$X"
-printf '  %s███  ███  ███  █    ███        █  ████%s\n' "$L3" "$X"
-printf '  %s█ █  █    █    █    █          █     █%s\n' "$L4" "$X"
-printf '  %s█  █ ████ ████ ████ ████   █  ███ ████%s\n' "$L5" "$X"
-printf '\n'
-
-rows=$(tput lines 2>/dev/null || echo 28)
-fh=$(( rows > 16 ? rows - 8 : rows ))          # leave the wordmark rows on top
+# Full-height dynamic list (fills the popup); small ◉ reece.is on the bottom border.
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
-    --height="$fh" --border=rounded \
+    --height=100% --border=rounded \
+    --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
+    --color='label:51,border:238' \
     --prompt='jump › ' --pointer='▶' --info=inline \
     --header='↑↓ move · type filter · ⏎ jump · ^X kill · esc cancel' \
     --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
