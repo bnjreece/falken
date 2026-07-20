@@ -68,8 +68,8 @@ pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
     --color='label:51,border:238' \
     --prompt='jump › ' --pointer='▶' --info=inline \
-    --header='↑↓ move · type filter · ⏎ jump · ^W wrap · ^X kill · esc cancel' \
-    --bind "ctrl-w:execute-silent($self --wrap-toggle {2})+reload($self --list)" \
+    --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · esc cancel' \
+    --bind "ctrl-w,alt-w:execute-silent($self --wrap-toggle {2})+reload($self --list)" \
     --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
 
 [ -n "${pick:-}" ] || exit 0
