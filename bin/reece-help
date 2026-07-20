@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# reece-help — cheat sheet for the reece.is tmux + agent cockpit. (prefix = C-a)
+b=$'\e[1m'; d=$'\e[2m'; x=$'\e[0m'
+c=$'\e[38;5;51m'; g=$'\e[38;5;46m'; y=$'\e[38;5;220m'; r=$'\e[38;5;203m'
+# teal -> cyan -> azure gradient rows for the wordmark
+L1=$'\e[38;2;0;255;200m'; L2=$'\e[38;2;0;235;225m'; L3=$'\e[38;2;40;210;250m'
+L4=$'\e[38;2;90;190;255m'; L5=$'\e[38;2;40;210;250m'
+cat <<EOF
+
+${L1}  ████ ████ ████ ████ ████     ███ ████${x}
+${L2}  █  █ █    █    █    █          █  █   ${x}
+${L3}  ███  ███  ███  █    ███        █  ████${x}
+${L4}  █ █  █    █    █    █          █     █${x}
+${L5}  █  █ ████ ████ ████ ████   █  ███ ████${x}
+
+  ${d}tmux + agent cockpit cheat sheet${x}   ${b}·${x}   ${y}${b}esc or q to close${x}
+
+  ${b}SESSIONS${x}
+    ${g}cs${x} [name]        start/attach a Claude session (plays the reece splash on create)
+    ${g}csd${x} [name]       same, but --dangerously-skip-permissions
+    ${g}ta${x} <name> attach   ${g}tl${x} list   ${g}tk${x} <name> kill
+
+  ${b}STATUS BAR${x} ${d}(bottom of every session)${x}
+    ${c}◉ reece.is${x}      the dot turns ${r}red${x} when any session needs you
+    ${r}✋ N name Xm${x}     agents blocked on you — with how long they've waited (longest first)
+    ${y}● N name${x}        agents working
+    ${d}✓ N${x}             done — agent stopped, still on your plate
+    ${d}■ N${x}             wrapped — you parked it (off your plate)
+    ${d}N sess${x}          total tmux sessions
+
+  ${b}KEYS${x} ${d}— Opt-letter (hold Option) = one-touch · C-a + Shift = fallback${x}
+    ${g}Opt-n${x} ${d}/ C-a N${x}    jump to the next session that ${r}needs you${x}  ${d}(tap again to cycle)${x}
+    ${g}Opt-m${x} ${d}/ C-a D${x}    cycle ${d}✓ done${x} sessions to review yourself, oldest first ${d}(tap to cycle)${x}
+    ${g}Opt-w${x} ${d}/ C-a W${x}    ${b}wrap${x} (park) the current session  → moves it to ${d}■${x}
+    ${g}C-a U${x}             un-wrap it
+    ${g}Opt-i${x} ${d}/ C-a I${x}    this help    ${g}C-a r${x}  reload tmux config
+
+  ${b}WRAP (from a shell)${x}
+    ${g}wrap${x} [name]      park a session    ${g}wrap -c${x} [name]   un-park
+
+  ${b}AI TEAM${x}
+    In any session, say ${y}"get Sol's take on this"${x} → Claude hands the task to
+    OpenAI Codex (GPT-5.x) via the ${g}codex-runner${x} skill, on your ChatGPT Pro sub.
+    Full multi-agent "Room": ${d}~/bnjmn/the-room/SPEC.md${x} (Phase 1, not built yet)
+
+  ${b}SPLASH${x}
+    ${g}reece${x}  full  ·  ${g}reece --quick${x}  short  ·  ${g}reece --loop${x}  loop
+
+  ${d}scripts: ~/bin/{reece,tmux-agent-state,tmux-reece-dot,tmux-jump-needs,wrap,reece-help}${x}
+  ${d}state: ~/.claude/agent-state/   hook: ~/bin/claude-state-hook   config: ~/.tmux.conf${x}
+
+EOF

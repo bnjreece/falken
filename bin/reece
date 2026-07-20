@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# reece.is — a little terminal splash.   usage: reece [--loop]
+set -uo pipefail
+ESC=$'\e'; RST="${ESC}[0m"; HIDE="${ESC}[?25l"; SHOW="${ESC}[?25h"; TOP="${ESC}[H"
+cleanup(){ printf '%s' "$SHOW$RST"; }
+
+# wordmark: REECE.IS
+B=(
+"  ████ ████ ████ ████ ████     ███ ████"
+"  █  █ █    █    █    █          █  █   "
+"  ███  ███  ███  █    ███        █  ████"
+"  █ █  █    █    █    █          █     █"
+"  █  █ ████ ████ ████ ████   █  ███ ████"
+)
+# truecolor gradient: teal -> cyan -> azure (loops)
+PAL=("0;255;200" "0;238;218" "0;222;238" "40;205;255" "95;188;255" "140;172;255" "95;188;255" "40;205;255" "0;222;238" "0;238;218")
+P=${#PAL[@]}
+BARS=(" " "▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+
+run_once() {
+  clear; printf '%s' "$HIDE"
+  # 1) gradient wave down the wordmark
+  for ((f=0; f<${BF:-26}; f++)); do
+    printf '%s' "$TOP"
+    for ((r=0; r<${#B[@]}; r++)); do
+      printf "${ESC}[38;2;%sm%s${RST}\n" "${PAL[$(((r+f)%P))]}" "${B[$r]}"
+    done
+    sleep 0.045
+  done
+  # 2) broadcast EQ bars (on-brand: audio / stream)
+  echo
+  for ((t=0; t<${EF:-44}; t++)); do
+    line=""
+    for ((i=0; i<40; i++)); do
+      line+="${ESC}[38;2;${PAL[$(((i+t)%P))]}m${BARS[$((RANDOM%9))]}"
+    done
+    printf "  %s${RST}\r" "$line"
+    sleep 0.055
+  done
+  # 3) settle
+  printf "  ${ESC}[38;2;90;188;255m◉ ${ESC}[38;2;0;255;200mlive from the mini  ${ESC}[2m·  reece.is/meeting${RST}%*s\n\n" 14 ""
+}
+
+BF=26; EF=44   # banner / eq frame counts (full run)
+case "${1:-}" in
+  -h|--help) echo "usage: reece [--loop|--quick]   # reece.is terminal splash"; exit 0 ;;
+  --quick)   BF=8; EF=14 ;;   # short splash (used on tmux session start)
+esac
+[[ -t 1 ]] || { echo "reece.is · live from the mini · reece.is/meeting"; exit 0; }  # non-tty: no escape codes
+# register traps only after the early exits, so --help/piped output stays clean;
+# Ctrl-C during the animation still exits (fires EXIT cleanup) instead of continuing (Sol review, 2026-07-20)
+trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+printf '%s' "$HIDE"
+if [[ "${1:-}" == "--loop" ]]; then
+  while true; do run_once; sleep 1.2; done
+else
+  run_once
+fi
+printf '%s' "$SHOW"

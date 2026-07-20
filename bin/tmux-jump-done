@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tmux-jump-done — cycle through ✓ done/idle sessions to review them, OLDEST-done first
+# (Claude can't tell "done-that-needs-you" from "done-done" — you can). Bound to prefix+D. bash 3.2 safe.
+dir="$HOME/.claude/agent-state"
+list=()
+if [ -d "$dir" ]; then
+  now=$(date +%s)
+  while IFS= read -r nm; do
+    [ -n "$nm" ] && list+=("$nm")
+  done < <(
+    for f in "$dir"/*; do
+      [ -e "$f" ] || continue
+      st=$(cat "$f" 2>/dev/null); [ "$st" = done ] || [ "$st" = idle ] || continue
+      mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+      [ $(( now - mt )) -gt 28800 ] && continue
+      printf '%s\t%s\n' "$mt" "$(basename "$f")"
+    done | sort -n | cut -f2                         # oldest done first
+  )
+fi
+if [ ${#list[@]} -eq 0 ]; then tmux display-message "no done sessions to review"; exit 0; fi
+cur=$(tmux display -p '#{session_name}' 2>/dev/null)
+target="${list[0]}"; i=0
+for nm in "${list[@]}"; do
+  if [ "$nm" = "$cur" ]; then target="${list[$(( (i+1) % ${#list[@]} ))]}"; break; fi
+  i=$(( i + 1 ))
+done
+tmux switch-client -t "$target" 2>/dev/null
+tmux display-message "✓ reviewing done: $target  (${#list[@]} in queue — C-a W to wrap when finished)"

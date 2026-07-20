@@ -7,9 +7,11 @@ A personal tmux + multi-agent control layer on the Mac mini. Scripts live in `~/
 - **Agent-state status bar** — every session shows: `◉ reece.is` (dot turns red on any `✋`), `✋ needs (named, wait-time, longest-first)`, `● working (named)`, `✓ done (count)`, `■ wrapped (count)`, `N sess`, clock.
   - Driven by `~/bin/claude-state-hook` (a Claude Code hook) → `~/.claude/agent-state/<session>` → `~/bin/tmux-agent-state`.
 - **Reactive dot** — `~/bin/tmux-reece-dot`.
-- **Keys** (primary = Opt-letter, fallback = C-a+Shift): `Opt-n` next needs · `Opt-m` cycle done · `Opt-w` wrap · `Opt-i` help · `C-a U` un-wrap.
-  - `~/bin/tmux-jump-needs`, `~/bin/tmux-jump-done`, `~/bin/wrap`, `~/bin/reece-help`.
-- **State semantics:** `✋` needs = agent blocked (Notification/PermissionRequest) · `✓` done = agent stopped (still your call) · `■` wrapped = you parked it (`Opt-w`).
+- **Hot switcher** — `Opt-s` (or `C-a Tab`) pops an `fzf` popup listing ALL sessions with live state, urgency-ordered; arrow/⏎ to jump, **type to filter** (e.g. "feld"). This is the general navigator (`~/bin/tmux-switch`); the rotation keys below are just quick-shortcuts for the two common cases.
+- **Keys** (primary = Opt-letter, fallback = C-a+Shift): `Opt-s` switcher · `Opt-n` next needs · `Opt-m` cycle done · `Opt-w` wrap · `Opt-i` help · `C-a U` un-wrap.
+  - `~/bin/tmux-switch`, `~/bin/tmux-jump-needs`, `~/bin/tmux-jump-done`, `~/bin/wrap`, `~/bin/reece-help`.
+- **State semantics:** `✋` needs = agent blocked on you (a *permission* request) · `●` working · `✓` done = agent stopped (still your call) · `■` wrapped = you parked it (`Opt-w`) · `○` idle.
+  - **Fix 2026-07-20:** Claude Code's `Notification` hook fires BOTH for permission requests AND for 60s-idle — the hook now reads the message and only flags `✋` on real permission asks, so background-workflow / bypass-permission sessions no longer false-alarm.
 - **AI delegation** — `codex-runner` skill (`~/.claude/skills/`): from any session, "get Sol's take" → OpenAI Codex on ChatGPT Pro. Full multi-agent Room: `~/bnjmn/the-room/SPEC.md`.
 
 ## BACKLOG (parked ideas)
@@ -33,3 +35,12 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 - **Auto-wrap** idle sessions after N hours.
 - **Digest command** — summarize all `✓ done` sessions at once.
 - **Full-screen dashboard TUI** — the cockpit as a dedicated view, not just the status line.
+
+## Repo layout & wiring
+**This repo IS the cockpit.** Scripts are canonical here in `bin/` and **symlinked into `~/bin`** (single source of truth — edit here, git-tracked). The config that wires them lives in `$HOME` (not tracked here):
+- **Scripts** — `bin/*` ⇄ `~/bin/*` (symlinks): `reece` splash · `reece-help` + `reece-help-view` cheatsheet (esc/q closes) · `tmux-switch` hot switcher (type-filter, `^X` kill, `◉ reece.is` label) · `tmux-agent-state` status-right · `tmux-reece-dot` reactive dot · `tmux-state-sync` seed+prune · `tmux-jump-needs`/`tmux-jump-done` rotation · `wrap` park · `claude-state-hook` the Claude→state bridge.
+- **tmux** — `~/.tmux.conf`: status-left/right call the scripts, `status-interval 1`, the `--- reece.is agent cockpit ---` + hot-switcher keybind blocks (Opt-s/n/m/w/i + C-a fallbacks).
+- **Claude Code** — `~/.claude/settings.json`: `claude-state-hook` on 6 events (UserPromptSubmit / Notification / PermissionRequest / Stop / SessionStart / SessionEnd).
+- **State** — `~/.claude/agent-state/<session>` (runtime files, not tracked; auto seeded/pruned by `tmux-state-sync`).
+
+Rehome on a new machine: clone this repo, symlink `bin/*`→`~/bin`, paste the tmux cockpit block + the settings.json hook.

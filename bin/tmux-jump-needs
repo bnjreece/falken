@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tmux-jump-needs — switch the client to the next session that NEEDS you (✋), cycling,
+# longest-waiting first. Bound to prefix+N. (bash 3.2 safe)
+dir="$HOME/.claude/agent-state"
+needs=()
+if [ -d "$dir" ]; then
+  now=$(date +%s)
+  while IFS= read -r nm; do
+    [ -n "$nm" ] && needs+=("$nm")
+  done < <(
+    for f in "$dir"/*; do
+      [ -e "$f" ] || continue
+      [ "$(cat "$f" 2>/dev/null)" = "needs" ] || continue
+      mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+      [ $(( now - mt )) -gt 28800 ] && continue
+      printf '%s\t%s\n' "$mt" "$(basename "$f")"
+    done | sort -n | cut -f2                       # oldest mtime first = longest waiting
+  )
+fi
+if [ ${#needs[@]} -eq 0 ]; then tmux display-message "✓ no agents need you"; exit 0; fi
+cur=$(tmux display -p '#{session_name}' 2>/dev/null)
+target="${needs[0]}"; i=0
+for nm in "${needs[@]}"; do
+  if [ "$nm" = "$cur" ]; then target="${needs[$(( (i+1) % ${#needs[@]} ))]}"; break; fi
+  i=$(( i + 1 ))
+done
+tmux switch-client -t "$target" 2>/dev/null
+tmux display-message "→ needs you: $target"

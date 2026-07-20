@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# tmux-state-sync — keep ~/.claude/agent-state aligned with live tmux sessions.
+#   (1) seed a default 'idle' for any live session with no state file (complete inventory),
+#   (2) prune state files whose session no longer exists (stops a stale ✋ pulsing the dot).
+# Idempotent, safe to call every status refresh. Prints nothing.
+dir="$HOME/.claude/agent-state"; mkdir -p "$dir"
+
+live_raw=$(tmux list-sessions -F '#{session_name}' 2>/dev/null)
+[ -n "$live_raw" ] || exit 0            # tmux not responding → do nothing (never mass-prune)
+live=" $(printf '%s' "$live_raw" | tr '\n' ' ') "
+
+# seed idle for untracked live sessions (only if missing — never clobbers real state)
+for s in $live; do
+  [ -n "$s" ] || continue
+  [ -e "$dir/$s" ] || echo idle > "$dir/$s"
+done
+
+# prune files for dead sessions
+for f in "$dir"/*; do
+  [ -e "$f" ] || continue
+  name=$(basename "$f")
+  case "$live" in
+    *" $name "*) : ;;                   # session still alive → keep
+    *) rm -f "$f" ;;                    # gone → remove stale state
+  esac
+done
+exit 0

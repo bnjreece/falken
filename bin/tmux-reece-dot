@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# tmux-reece-dot — the reece.is "live" dot; turns RED when any session needs you (bash 3.2 safe).
+dir="$HOME/.claude/agent-state"
+red=0
+if [ -d "$dir" ]; then
+  now=$(date +%s)
+  for f in "$dir"/*; do
+    [ -e "$f" ] || continue
+    [ "$(cat "$f" 2>/dev/null)" = "needs" ] || continue
+    mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+    [ $(( now - mt )) -gt 28800 ] && continue
+    red=1; break
+  done
+fi
+if [ "$red" = 1 ]; then
+  # pulse: alternate bright/dim red each second (needs your attention)
+  if [ $(( $(date +%s) % 2 )) -eq 0 ]; then printf '#[fg=colour196,bold]◉#[default]'
+  else printf '#[fg=colour124]◉#[default]'; fi
+else
+  printf '#[fg=colour46]◉#[default]'                       # all clear → steady green
+fi

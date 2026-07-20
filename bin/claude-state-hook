@@ -1,0 +1,30 @@
+#!/bin/bash
+# claude-state-hook — records the current tmux session's Claude agent state for the
+# tmux status bar. Wired as a Claude Code hook (see ~/.claude/settings.json).
+# Reads the hook JSON payload on stdin; keys state by tmux session name.
+[ -n "$TMUX_PANE" ] || exit 0                                   # only meaningful inside tmux
+payload=$(cat)
+ev=$(printf '%s' "$payload" | grep -o '"hook_event_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+sess=$(tmux display -pt "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
+[ -n "$sess" ] || exit 0
+dir="$HOME/.claude/agent-state"; mkdir -p "$dir"; f="$dir/$sess"
+case "$ev" in
+  UserPromptSubmit)  echo working > "$f" ;;                      # you gave it a task
+  PermissionRequest) echo needs   > "$f" ;;                      # explicit approval gate
+  Notification)
+    # Claude Code fires Notification for TWO reasons: (a) it needs tool permission,
+    # (b) the prompt has sat idle 60s. Only (a) is a real "needs you". Idle pings would
+    # falsely flag background-workflow / bypass-permission sessions (e.g. a running
+    # /workflow), so ignore them: a finished turn is already 'done' via Stop, and a busy
+    # one should stay 'working'.
+    msg=$(printf '%s' "$payload" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
+    case "$msg" in
+      *permission*|*Permission*|*approval*|*Approval*) echo needs > "$f" ;;
+      *) : ;;                                                    # idle/other → leave state as-is
+    esac
+    ;;
+  Stop)         echo done > "$f" ;;                              # finished, ready for you
+  SessionStart) echo idle > "$f" ;;
+  SessionEnd)   rm -f "$f" ;;
+esac
+exit 0

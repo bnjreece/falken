@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# tmux-switch — fzf "hot switcher" across ALL tmux sessions, showing live agent state.
+# Bound to Opt-s (primary) and C-a Tab (fallback). Runs inside `tmux display-popup -E`.
+#   ↑/↓ move · type to filter · Enter jump · Ctrl-X kill (confirm) · Esc cancel
+# Modes: --list (emit rows, used by fzf reload) · --kill <sess> (confirm+kill) · default (interactive)
+# Sort: ✋ needs (longest-waiting first) → ● working → ✓ done → ○ idle → ■ wrapped.
+# bash 3.2 safe (no mapfile / no declare -A).
+set -uo pipefail
+self="$0"
+dir="$HOME/.claude/agent-state"
+
+human() {  # seconds -> Xs / Xm / Xh
+  local s=$1
+  if   [ "$s" -lt 60 ];   then echo "${s}s"
+  elif [ "$s" -lt 3600 ]; then echo "$((s/60))m"
+  else echo "$((s/3600))h"; fi
+}
+
+list() {
+  local now cur R G D Y W DIM RST s st age f mt icon col lab rk wait mark disp tracked
+  now=$(date +%s); cur=$(tmux display -p '#{session_name}' 2>/dev/null)
+  R=$'\033[38;5;203m'; G=$'\033[38;5;150m'; D=$'\033[38;5;244m'
+  Y=$'\033[38;5;180m'; W=$'\033[38;5;240m'; DIM=$'\033[2m'; RST=$'\033[0m'
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    st="idle"; age=0; tracked=0; f="$dir/$s"
+    if [ -f "$f" ]; then
+      tracked=1; st=$(cat "$f" 2>/dev/null); [ -n "$st" ] || st="idle"
+      mt=$(stat -f %m "$f" 2>/dev/null || echo "$now"); age=$(( now - mt ))
+      [ "$st" = needs ] && [ "$age" -gt 28800 ] && st="idle"
+    fi
+    case "$st" in
+      needs)   icon="✋"; col="$R"; lab="needs  "; rk=0 ;;
+      working) icon="●";  col="$G"; lab="working"; rk=1 ;;
+      done)    icon="✓";  col="$D"; lab="done   "; rk=2 ;;
+      idle)    icon="○";  col="$Y"; lab="idle   "; rk=3 ;;
+      wrapped) icon="■";  col="$W"; lab="wrapped"; rk=4 ;;
+      *)       icon="·";  col="$Y"; lab="$st";      rk=5 ;;
+    esac
+    if [ "$tracked" = 1 ]; then wait=$(human "$age"); else wait=""; fi
+    mark=""; [ "$s" = "$cur" ] && mark=" ${DIM}←here${RST}"
+    disp=$(printf '%s%s %s%s  %-4s  %s%s%s%s' "$col" "$icon" "$lab" "$RST" "$wait" "$col" "$s" "$RST" "$mark")
+    printf '%d\t%d\t%s\t%s\n' "$rk" "$age" "$disp" "$s"
+  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null) \
+    | sort -t "$(printf '\t')" -k1,1n -k2,2nr | cut -f3,4
+}
+
+case "${1:-}" in
+  --list) list; exit 0 ;;
+  --kill)
+    s="${2:-}"; [ -n "$s" ] || exit 0
+    printf '\n  kill session "%s"?  [y/N] ' "$s"
+    read -rsn1 a; echo
+    case "$a" in y|Y) tmux kill-session -t "$s" 2>/dev/null ;; esac
+    exit 0 ;;
+esac
+
+TAB=$(printf '\t')
+pick=$("$self" --list | fzf --ansi --no-sort --reverse \
+    --delimiter="$TAB" --with-nth=1 \
+    --height=100% --border=rounded \
+    --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
+    --prompt='jump › ' --pointer='▶' --info=inline \
+    --header='↑↓ move · type filter · ⏎ jump · ^X kill · esc cancel' \
+    --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
+
+[ -n "${pick:-}" ] || exit 0
+sess=$(printf '%s' "$pick" | cut -f2)
+[ -n "$sess" ] && tmux switch-client -t "$sess"

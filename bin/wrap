@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# wrap [session]      — mark a Claude session "wrapped" (parked / off your plate → ■ in the bar)
+# wrap -c [session]   — un-wrap (back to ✓ done)
+# With no session arg, uses the current tmux session. (bash 3.2 safe)
+dir="$HOME/.claude/agent-state"; mkdir -p "$dir"
+clr=0
+case "${1:-}" in -c|--clear|unwrap) clr=1; shift ;; esac
+sess="${1:-$(tmux display -p '#{session_name}' 2>/dev/null)}"
+if [ -z "$sess" ]; then
+  echo "usage: wrap [session]     (inside tmux, or pass a name)"
+  echo "       wrap -c [session]  un-wrap"
+  exit 1
+fi
+if [ "$clr" = 1 ]; then echo done > "$dir/$sess"; msg="un-wrapped: $sess"
+else echo wrapped > "$dir/$sess"; msg="parked (wrapped): $sess"; fi
+if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then tmux display-message "$msg" 2>/dev/null; fi
+echo "$msg"
