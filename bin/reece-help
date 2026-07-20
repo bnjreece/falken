@@ -29,14 +29,15 @@ ${L5}  █  █ ████ ████ ████ ████   █  █�
     ${d}N sess${x}          total tmux sessions
 
   ${b}KEYS${x} ${d}— Opt-letter (hold Option) = one-touch · C-a + Shift = fallback${x}
+    ${g}Opt-s${x} ${d}/ C-a Tab${x}  ${b}switcher${x} — pick any session, type to filter  ${d}(inside: ^W wrap · ^X kill)${x}
     ${g}Opt-n${x} ${d}/ C-a N${x}    jump to the next session that ${r}needs you${x}  ${d}(tap again to cycle)${x}
     ${g}Opt-m${x} ${d}/ C-a D${x}    cycle ${d}✓ done${x} sessions to review yourself, oldest first ${d}(tap to cycle)${x}
-    ${g}Opt-w${x} ${d}/ C-a W${x}    ${b}wrap${x} (park) the current session  → moves it to ${d}■${x}
-    ${g}C-a U${x}             un-wrap it
+    ${g}Opt-w${x}             ${b}wrap ⇄ unwrap${x} toggle for this session  ${d}(■ ⇄ ✓)${x}
+    ${g}C-a W${x} ${d}/ C-a U${x}    force wrap  /  force un-wrap
     ${g}Opt-i${x} ${d}/ C-a I${x}    this help    ${g}C-a r${x}  reload tmux config
 
   ${b}WRAP (from a shell)${x}
-    ${g}wrap${x} [name]      park a session    ${g}wrap -c${x} [name]   un-park
+    ${g}wrap${x} [name]  park    ${g}wrap -c${x} [name]  un-park    ${g}wrap -t${x} [name]  toggle
 
   ${b}AI TEAM${x}
     In any session, say ${y}"get Sol's take on this"${x} → Claude hands the task to

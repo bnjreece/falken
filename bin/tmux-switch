@@ -53,6 +53,11 @@ case "${1:-}" in
     read -rsn1 a; echo
     case "$a" in y|Y) tmux kill-session -t "$s" 2>/dev/null ;; esac
     exit 0 ;;
+  --wrap-toggle)
+    s="${2:-}"; [ -n "$s" ] || exit 0
+    # ■ wrapped ⇄ ✓ done (parked ↔ un-parked)
+    if [ "$(cat "$dir/$s" 2>/dev/null)" = wrapped ]; then echo done > "$dir/$s"; else echo wrapped > "$dir/$s"; fi
+    exit 0 ;;
 esac
 
 TAB=$(printf '\t')
@@ -63,7 +68,8 @@ pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
     --color='label:51,border:238' \
     --prompt='jump › ' --pointer='▶' --info=inline \
-    --header='↑↓ move · type filter · ⏎ jump · ^X kill · esc cancel' \
+    --header='↑↓ move · type filter · ⏎ jump · ^W wrap · ^X kill · esc cancel' \
+    --bind "ctrl-w:execute-silent($self --wrap-toggle {2})+reload($self --list)" \
     --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
 
 [ -n "${pick:-}" ] || exit 0

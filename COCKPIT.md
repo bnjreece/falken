@@ -8,7 +8,7 @@ A personal tmux + multi-agent control layer on the Mac mini. Scripts live in `~/
   - Driven by `~/bin/claude-state-hook` (a Claude Code hook) → `~/.claude/agent-state/<session>` → `~/bin/tmux-agent-state`.
 - **Reactive dot** — `~/bin/tmux-reece-dot`.
 - **Hot switcher** — `Opt-s` (or `C-a Tab`) pops an `fzf` popup listing ALL sessions with live state, urgency-ordered; arrow/⏎ to jump, **type to filter** (e.g. "feld"). This is the general navigator (`~/bin/tmux-switch`); the rotation keys below are just quick-shortcuts for the two common cases.
-- **Keys** (primary = Opt-letter, fallback = C-a+Shift): `Opt-s` switcher · `Opt-n` next needs · `Opt-m` cycle done · `Opt-w` wrap · `Opt-i` help · `C-a U` un-wrap.
+- **Keys** (primary = Opt-letter, fallback = C-a+Shift): `Opt-s` switcher (inside: `^W` wrap-toggle · `^X` kill) · `Opt-n` next needs · `Opt-m` cycle done · `Opt-w` wrap⇄unwrap toggle · `Opt-i` help · `C-a W`/`C-a U` force wrap/unwrap.
   - `~/bin/tmux-switch`, `~/bin/tmux-jump-needs`, `~/bin/tmux-jump-done`, `~/bin/wrap`, `~/bin/reece-help`.
 - **State semantics:** `✋` needs = agent blocked on you (a *permission* request) · `●` working · `✓` done = agent stopped (still your call) · `■` wrapped = you parked it (`Opt-w`) · `○` idle.
   - **Fix 2026-07-20:** Claude Code's `Notification` hook fires BOTH for permission requests AND for 60s-idle — the hook now reads the message and only flags `✋` on real permission asks, so background-workflow / bypass-permission sessions no longer false-alarm.
