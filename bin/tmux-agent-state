@@ -18,8 +18,10 @@ if [ -d "$dir" ]; then
     case "$st" in
       needs)     needs_line+=("$age $name") ;;
       working)   working+=("$name") ;;
-      done|idle) done_n=$(( done_n + 1 )) ;;
+      done)      done_n=$(( done_n + 1 )) ;;
       wrapped)   wrapped_n=$(( wrapped_n + 1 )) ;;
+      # idle → intentionally NOT shown (noise floor; visible as ○ in the switcher).
+      # So chips sum to ≤ "N sess"; the difference is idle.
     esac
   done
 fi
