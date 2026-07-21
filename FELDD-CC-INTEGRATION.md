@@ -62,3 +62,22 @@ Since we're *editing feldd-cc*, every button is rebindable (the config-only play
 
 ## Key files
 `feldd_cc.py` (daemon + `/hook` + render loop + button dispatch) · `sp1_console/protocol.py` (wire codec) · `sp1_console/transport.py` + `cb_transport.py` (USB/BLE) · `firmware/app/src/{protocol.c,led.c,led_override.c}` (device truth) · `~/bin/claude-state-hook` (writes `agent-state`).
+
+## Follow-on: SP-1 track ↔ software UI (spec'd 2026-07-21 · confirmed)
+Close the loop — surface feldd-cc's 4 Track-LED assignments back onto the screen so the physical box and the software UI always agree.
+
+**Data — feldd-cc writes a file the UI reads (chosen: by far the best):**
+- feldd-cc writes `~/.claude/agent-tracks` whenever its board assignment changes — up to 4 lines, `<n>\t<session>` (n=1..4 = the MRU Track-LED sessions; omit empty slots). Same cheap pattern as `agent-state`.
+- NOT HTTP: the status bar renders every 1s — a `curl /config` per tick adds latency + a hard dependency on the daemon. A file read is instant + decoupled.
+
+**Display (confirmed):**
+- **Switcher — all four:** in `tmux-switch` `list()`, read `agent-tracks` and append a **plain, distinct badge `[1]`–`[4]`** to the 4 tracked sessions. Color = NOT a fleet-state color (e.g. cream `230`, bold) so it reads as "on the physical box." Other 16 sessions unbadged.
+- **Status bar — current only:** a small `bin/tmux-track-badge <session>` reads `agent-tracks` for the passed session → prints `[N]` (bright) or nothing. Wire into `status-left`: `... [#S]#(/Users/bnjmn/bin/tmux-track-badge #{session_name}) `.
+
+**Build steps:**
+1. feldd-cc: write `~/.claude/agent-tracks` on board change (edit near the LED-assignment / board-mirror code; `/restart` to apply — the daemon is live). Do it on a branch, merge, `POST /restart`.
+2. new `bin/tmux-track-badge` (reads agent-tracks → emits `[N]`), symlink into `~/bin`.
+3. `tmux-switch`: badge the 4 tracked in `list()`.
+4. `~/.tmux.conf`: add the badge `#()` to `status-left`.
+
+**Confirmed decisions:** bar = current session's track only · switcher = all four · badge = plain-but-distinct `[N]` · data = feldd-cc-writes-file (not HTTP).
