@@ -39,7 +39,9 @@ list() {
     esac
     if [ "$tracked" = 1 ]; then wait=$(human "$age"); else wait=""; fi
     mark=""; [ "$s" = "$cur" ] && mark=" ${DIM}←here${RST}"
-    disp=$(printf '%s%s %s%s  %-4s  %s%s%s%s' "$col" "$icon" "$lab" "$RST" "$wait" "$col" "$s" "$RST" "$mark")
+    tb=$(awk -F'\t' -v x="$s" '$2==x{print $1; exit}' "$HOME/.claude/agent-tracks" 2>/dev/null)
+    badge=""; [ -n "$tb" ] && badge=$'\033[38;5;230m'" [$tb]"$'\033[0m'   # SP-1 Track LED 1-4
+    disp=$(printf '%s%s %s%s  %-4s  %s%s%s%s%s' "$col" "$icon" "$lab" "$RST" "$wait" "$col" "$s" "$RST" "$badge" "$mark")
     printf '%d\t%d\t%s\t%s\n' "$rk" "$age" "$disp" "$s"
   done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null) \
     | sort -t "$(printf '\t')" -k1,1n -k2,2nr | cut -f3,4
@@ -61,7 +63,8 @@ case "${1:-}" in
 esac
 
 TAB=$(printf '\t')
-# Full-height dynamic list (fills the popup); small REECE.IS ascii wordmark as the footer.
+"$(dirname "$self")/tmux-track-badge" >/dev/null 2>&1 || true   # refresh SP-1 track map (cached)
+# Full-height dynamic list (fills the popup); small FALKEN ascii wordmark as the footer.
 # alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
 FOOTER='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
 █▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█

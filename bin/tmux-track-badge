@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# tmux-track-badge — mirror feldd-cc's 4 Track-LED assignments (the SP-1 front row, the
+# 4 MRU sessions) into ~/.claude/agent-tracks, and print a session's track badge for the bar.
+#   (no arg)   → just refresh the cache if it's stale (>2s)
+#   <session>  → refresh + print that session's badge  [N]  (tmux format), else nothing
+# The switcher reads ~/.claude/agent-tracks directly. Cached so /config is hit ≤ every 2s.
+set -uo pipefail
+f="$HOME/.claude/agent-tracks"
+now=$(date +%s); mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+if [ $(( now - mt )) -ge 2 ]; then
+  out=$(curl -s -m 1 http://localhost:9200/config 2>/dev/null | python3 -c "
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+b=d.get('board') or []
+print('\n'.join('%d\t%s'%(i+1,b[i]['name']) for i in range(min(4,len(b))) if b[i] and b[i].get('name')))
+" 2>/dev/null)
+  if [ -n "$out" ]; then printf '%s\n' "$out" > "$f.tmp" && mv "$f.tmp" "$f"
+  else touch "$f" 2>/dev/null; fi        # daemon down → keep last map, back off re-hitting
+fi
+sess="${1:-}"; [ -n "$sess" ] || exit 0
+tr=$(awk -F'\t' -v s="$sess" '$2==s{print $1; exit}' "$f" 2>/dev/null)
+[ -n "$tr" ] && printf '#[fg=colour230,bold] [%s]#[default]' "$tr"
+exit 0
