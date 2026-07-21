@@ -31,20 +31,27 @@ Since we're *editing feldd-cc*, every button is rebindable (the config-only play
 - **Play = "continue"** into the terminal — currently `["continue","Enter"]` (one click types + sends). Keep one-click-send (optional future: two-stage click-to-stage / double-to-send).
 - `run_button_action` runs `{"shell": cmd}`, `cwd = focused session cwd`, 10s timeout (`feldd_cc.py:836-862`).
 
-## Faders (4 × 0-127) — brainstorm, TBD
-Currently `autopilot` preset; repurpose for Falken. Candidate uses:
-- **DND / focus dial** — slide down to hush/dim the board (stop flashing) when heads-down; up to re-arm.
-- **Fleet scrubber** — slide across the session list to preview/highlight; press to jump.
-- **Live-rig control** — "live from the mini": fader = studio-light dimmer (existing amaran BLE) or stream volume.
-- **Auto-wrap patience** — how long a done/idle session waits before auto-parking.
-- *(Gotcha: absolute 0-127 faders have a pickup/takeover jump; use soft-takeover for continuous controls.)*
+## Faders (4 × 0-127) — FINAL (global, Claude-Code-focused)
+**All GLOBAL/fleet-wide.** Per-session was rejected: non-motorized faders can't chase sessions that swap in/out under them, you'd never know which fader owns which agent, and a fresh session could inherit a hot leash → dangerous. A global fader always means exactly one thing.
+
+| # | fader | low ↔ high |
+|---|---|---|
+| **1** | **Autopilot on/off** | bottom = no auto-continue · top = auto-continue the fleet |
+| **2** | **Autopilot duration** | bottom = 5 min · mid = ~1 hr · top = forever — how long it runs before stopping to check in (bounded-autonomy safety valve) |
+| **3** | **Scroll *within*** the focused session | scrub back through that agent's output (grab-and-scrub; absolute-over-variable = feel, not precise) |
+| **4** | **Scroll *across*** the fleet | sweep a highlight across all sessions (LED brightens as you pass); press Play to jump |
+
+- **3 + 4 are a pair:** *down into* one session vs *sideways across* all of them.
+- **Optional:** fold 1+2 into one fader (off → 5m → 1h → forever) to free a slot; kept separate for the explicit on/off switch.
+- **Rejected:** Effort (global "think hard" for all sessions is wrong), DND, per-session anything (swap/motorization), live-rig/lights/volume (keep it Claude-Code-only).
+- **Gotcha:** absolute 0-127 faders → the LED is the readout, the fader is input-only; use soft-takeover / grab-to-set.
 
 ## Confirmed decisions
 1. ✅ **State-watch `~/.claude/agent-state/`** — one source of truth; gives `wrapped`.
 2. ✅ **LED cadence** needs=fast-blink · working=**pulse** · done=solid · wrapped/idle=off. (Front Track LEDs track the last-4 sessions → off is rare there, which is fine.)
 3. ✅ **Button map** above (Track=jump · FWD/RWD=triage jog · Vol±=wrap/unwrap · Play=continue).
 4. ✅ **Transport stays feldd-cc-on-BLE**; extend feldd-cc, no separate bridge.
-5. ⏳ **Faders** — see brainstorm.
+5. ✅ **Faders** (global): autopilot on/off · duration · scroll-within · scroll-across. Per-session / effort / DND / live-rig all rejected.
 
 ## Gotchas (design around these)
 - **Override is sticky** — the bridge must `led_release()` on every exit or the LEDs freeze.
