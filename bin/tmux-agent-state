@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tmux-agent-state — agent cockpit for the tmux status bar (bash 3.2 safe).
+# tmux-agent-state — Falken's agent board for the tmux status bar (bash 3.2 safe).
 #   N sess   ✋ needs (red, named, wait-time, longest-first)   ● working (green, named)
 #   ✓ done (dim, count)   ■ wrapped (dim, count)
 dir="$HOME/.claude/agent-state"

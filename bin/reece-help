@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# reece-help — cheat sheet for the reece.is tmux + agent cockpit. (prefix = C-a)
+# reece-help — cheat sheet for Falken, the reece.is agent board. (prefix = C-a)
 b=$'\e[1m'; d=$'\e[2m'; x=$'\e[0m'
 c=$'\e[38;5;51m'; g=$'\e[38;5;46m'; y=$'\e[38;5;220m'; r=$'\e[38;5;203m'; am=$'\e[38;5;214m'
 # teal -> cyan -> azure gradient rows for the wordmark
@@ -13,7 +13,7 @@ ${L3}  ███  ███  ███  █    ███        █  ███�
 ${L4}  █ █  █    █    █    █          █     █${x}
 ${L5}  █  █ ████ ████ ████ ████   █  ███ ████${x}
 
-  ${d}tmux + agent cockpit cheat sheet${x}   ${b}·${x}   ${y}${b}esc or q to close${x}
+  ${d}Falken · the falcon over your fleet${x}   ${b}·${x}   ${y}${b}esc or q to close${x}
 
   ${b}SESSIONS${x}
     ${g}cs${x} [name]        start/attach a Claude session (plays the reece splash on create)

@@ -1,4 +1,5 @@
-# reece.is cockpit — what exists + backlog
+# Falken — what exists + backlog
+*The falcon over your fleet · reece.is/falken*
 
 A personal tmux + multi-agent control layer on the Mac mini. Scripts live in `~/bin`, config in `~/.tmux.conf` + `~/.claude/settings.json`. Full usage: run `reece-help` (or `Opt-i`).
 
@@ -26,7 +27,7 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 ### Other parked ideas
 - **`◉` dot pulse** — animate the reece dot (blink) when something needs you, not just static red.
 - **Rate-limit meter** — Max window % + Sol window % in the status bar (from a ledger).
-- **Unify with SP-1 LEDs** — same hook state drives the feldd-cc LEDs + this bar (one cockpit, physical + software).
+- **Unify with SP-1 LEDs** — same hook state drives the feldd-cc LEDs + this bar (one board, physical + software).
 - **macOS desktop notification** on `✋` (local, no phone needed).
 - **`csd` red danger theme** — red status bar when in a skip-permissions session.
 - **Denylist guard** — `csd` refuses to launch in `rise`/`estate`/`vendr-work`.
@@ -34,13 +35,13 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 - **Worktree mode** — `cs --wt <branch>` = git worktree + session.
 - **Auto-wrap** idle sessions after N hours.
 - **Digest command** — summarize all `✓ done` sessions at once.
-- **Full-screen dashboard TUI** — the cockpit as a dedicated view, not just the status line.
+- **Full-screen dashboard TUI** — Falken as a dedicated view, not just the status line.
 
 ## Repo layout & wiring
-**This repo IS the cockpit.** Scripts are canonical here in `bin/` and **symlinked into `~/bin`** (single source of truth — edit here, git-tracked). The config that wires them lives in `$HOME` (not tracked here):
+**This repo IS Falken.** Scripts are canonical here in `bin/` and **symlinked into `~/bin`** (single source of truth — edit here, git-tracked). The config that wires them lives in `$HOME` (not tracked here):
 - **Scripts** — `bin/*` ⇄ `~/bin/*` (symlinks): `reece` splash · `reece-help` + `reece-help-view` cheatsheet (esc/q closes) · `tmux-switch` hot switcher (type-filter, `^X` kill, `◉ reece.is` label) · `tmux-agent-state` status-right · `tmux-reece-dot` reactive dot · `tmux-state-sync` seed+prune · `tmux-jump-needs`/`tmux-jump-done` rotation · `wrap` park · `claude-state-hook` the Claude→state bridge.
-- **tmux** — `~/.tmux.conf`: status-left/right call the scripts, `status-interval 1`, the `--- reece.is agent cockpit ---` + hot-switcher keybind blocks (Opt-s/n/m/w/i + C-a fallbacks).
+- **tmux** — `~/.tmux.conf`: status-left/right call the scripts, `status-interval 1`, the `--- Falken · reece.is agent board ---` + hot-switcher keybind blocks (Opt-s/n/m/w/i + C-a fallbacks).
 - **Claude Code** — `~/.claude/settings.json`: `claude-state-hook` on 6 events (UserPromptSubmit / Notification / PermissionRequest / Stop / SessionStart / SessionEnd).
 - **State** — `~/.claude/agent-state/<session>` (runtime files, not tracked; auto seeded/pruned by `tmux-state-sync`).
 
-Rehome on a new machine: clone this repo, symlink `bin/*`→`~/bin`, paste the tmux cockpit block + the settings.json hook.
+Rehome on a new machine: clone this repo, symlink `bin/*`→`~/bin`, paste the Falken keybind block + the settings.json hook.
