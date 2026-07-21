@@ -16,23 +16,35 @@ Grounded in a code-level research pass of `~/bnjmn/feldd-sp1-firmware/feldd-cc/`
 | Falken state | LED |
 |---|---|
 | **needs** | **fast blink** (~3-4 Hz) |
-| **working** | **slow blink** (~0.5-1 Hz) |
+| **working** | **pulse / breathe** (smooth) |
 | **done** | **solid** |
 | **wrapped / idle** | **off** |
-- Fixes the working-vs-done collision (both solid today).
+- **NOTE — pulse WORKS on Benjamin's device.** The research read the *repo* firmware (concluded breathe→solid), but the *flashed* firmware renders a nice pulse. Trust the device; verify against the flashed firmware, not repo source.
+- Fixes the working-vs-done collision (both solid today would be indistinguishable).
 - Position (feldd already does this): Track LEDs `0-3` = front/active sessions (MRU); side LEDs `4-7` = overflow/bench. `needs` auto-promotes a session to a front Track LED.
 
-## Buttons — bidirectional (partly there already)
-- Cockpit already binds: **Track 1-4 = jump to that session**, **Vol+ = next-needs**, **Play = nudge/continue**.
-- Free to bind (config: play/vol±/fwd/rwd; Track1-4 reserved): **Vol-, FWD, RWD**.
-  - Proposed: **FWD = wrap current** (`wrap -t <session>`), **RWD = cycle done** (like Opt-m), **Vol- = jump next-needs** (or keep as-is).
-- `run_button_action` runs `{"shell": cmd}` with `cwd = active session cwd`, 10s timeout (`feldd_cc.py:836-862`).
+## Buttons — bidirectional (CONFIRMED)
+Since we're *editing feldd-cc*, every button is rebindable (the config-only play/vol±/fwd/rwd limit doesn't apply).
+- **Track 1-4** = jump to the 4 tracked (most-recent) sessions. *(keep)*
+- **FWD / RWD** = **triage jog** — step forward/back through everything wanting you: **needs (oldest→newest) then dones (oldest→newest)**, one combined cycle.
+- **Vol- = wrap · Vol+ = unwrap** the focused session.
+- **Play = "continue"** into the terminal — currently `["continue","Enter"]` (one click types + sends). Keep one-click-send (optional future: two-stage click-to-stage / double-to-send).
+- `run_button_action` runs `{"shell": cmd}`, `cwd = focused session cwd`, 10s timeout (`feldd_cc.py:836-862`).
 
-## Open decisions
-1. **State source:** state-watch `agent-state/` (recommended — gives `wrapped`, one source of truth) vs keep event-push + add a wrap hook.
-2. **off = wrapped AND idle** (confirmed: no color, so `off` is the only "parked" signal; `done` stays solid-lit until reviewed).
-3. **Button map:** which of Vol-/FWD/RWD → wrap / cycle-done / next-needs?
-4. **Transport stays feldd-cc-on-BLE.** The standalone Falken bridge idea is dropped — feldd-cc is the bridge.
+## Faders (4 × 0-127) — brainstorm, TBD
+Currently `autopilot` preset; repurpose for Falken. Candidate uses:
+- **DND / focus dial** — slide down to hush/dim the board (stop flashing) when heads-down; up to re-arm.
+- **Fleet scrubber** — slide across the session list to preview/highlight; press to jump.
+- **Live-rig control** — "live from the mini": fader = studio-light dimmer (existing amaran BLE) or stream volume.
+- **Auto-wrap patience** — how long a done/idle session waits before auto-parking.
+- *(Gotcha: absolute 0-127 faders have a pickup/takeover jump; use soft-takeover for continuous controls.)*
+
+## Confirmed decisions
+1. ✅ **State-watch `~/.claude/agent-state/`** — one source of truth; gives `wrapped`.
+2. ✅ **LED cadence** needs=fast-blink · working=**pulse** · done=solid · wrapped/idle=off. (Front Track LEDs track the last-4 sessions → off is rare there, which is fine.)
+3. ✅ **Button map** above (Track=jump · FWD/RWD=triage jog · Vol±=wrap/unwrap · Play=continue).
+4. ✅ **Transport stays feldd-cc-on-BLE**; extend feldd-cc, no separate bridge.
+5. ⏳ **Faders** — see brainstorm.
 
 ## Gotchas (design around these)
 - **Override is sticky** — the bridge must `led_release()` on every exit or the LEDs freeze.
