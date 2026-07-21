@@ -70,16 +70,37 @@ render(){
   band
 }
 
+# dissolve the whole frame to black over a few grey steps, then clear — so the
+# handoff to whatever runs next (Claude Code) fades in from black, no flash.
+fade_out(){
+  local oA1="$A1" oA2="$A2" oA3="$A3" oW1="$W1" oW2="$W2" oW3="$W3" oGRN="$GRN" oCUR="$CUR"
+  local s c
+  for s in 240 238 236 234 232; do
+    c=$'\033[38;5;'"$s"'m'
+    A1="$c"; A2="$c"; A3="$c"; W1="$c"; W2="$c"; W3="$c"; GRN="$c"; CUR="$c"
+    render 3 4 1; sleep 0.055
+  done
+  A1="$oA1"; A2="$oA2"; A3="$oA3"; W1="$oW1"; W2="$oW2"; W3="$oW3"; GRN="$oGRN"; CUR="$oCUR"
+  printf '%s' "$CLR"; sleep 0.04                 # clean black; next thing draws over it
+}
+
 play(){
-  if [ "$quick" = 1 ]; then render 3 4 1; sleep 0.5; return; fi
-  render 1 0 0; sleep 0.10
-  render 2 0 0; sleep 0.10
-  render 3 0 0; sleep 0.20          # wordmark in
+  if [ "$quick" = 1 ]; then
+    render 0 0 0; sleep 0.05                      # CRT flick-on
+    render 3 4 1; sleep 0.45                      # snap to full, brief hold
+    fade_out; return
+  fi
+  render 0 0 0; sleep 0.06                        # power-on flicker...
+  printf '%s' "$CLR"; sleep 0.05                  #   ...blink dark
+  render 1 0 0; sleep 0.09
+  render 2 0 0; sleep 0.09
+  render 3 0 0; sleep 0.20                        # wordmark reveals
   render 3 1 0; sleep 0.16
   render 3 2 0; sleep 0.16
   render 3 3 0; sleep 0.16
-  render 3 4 1; sleep 0.40          # checklist done
-  local i=0; while [ "$i" -lt 3 ]; do render 3 4 0; sleep 0.38; render 3 4 1; sleep 0.38; i=$((i+1)); done
+  render 3 4 1; sleep 0.45                        # checklist typed on
+  local i=0; while [ "$i" -lt 2 ]; do render 3 4 0; sleep 0.36; render 3 4 1; sleep 0.36; i=$((i+1)); done
+  fade_out                                        # dissolve to black → smooth handoff
 }
 
 if [ "$loop" = 1 ]; then while :; do play; done; else play; fi
