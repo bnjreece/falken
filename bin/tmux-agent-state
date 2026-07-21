@@ -14,7 +14,7 @@ if [ -d "$dir" ]; then
     st=$(cat "$f" 2>/dev/null)
     mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
     age=$(( now - mt ))
-    [ "$age" -gt 28800 ] && continue                 # >8h stale → skip
+    [ "$st" = needs ] && [ "$age" -gt 28800 ] && st="idle"   # stale needs → idle; count everything else (matches switcher)
     case "$st" in
       needs)     needs_line+=("$age $name") ;;
       working)   working+=("$name") ;;
@@ -44,7 +44,7 @@ if [ "$bar_total" -gt 0 ]; then
   bw=20
   blk=$(printf '\342\226\210')                            # █ (U+2588), byte-exact regardless of locale
   bn=("$needs_n" "$work_n" "$done_n" "$idle_n" "$wrapped_n")
-  bcol=(167 71 178 245 240)
+  bcol=(167 78 178 245 240)
   acc=0; drawn=0; k=0
   while [ "$k" -lt 5 ]; do
     acc=$(( acc + ${bn[$k]} ))
