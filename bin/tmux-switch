@@ -42,9 +42,10 @@ list() {
     tb=$(awk -F'\t' -v x="$s" '$2==x{print $1; exit}' "$HOME/.claude/agent-tracks" 2>/dev/null)
     badge=""; [ -n "$tb" ] && badge=$'\033[38;5;230m'" [$tb]"$'\033[0m'   # SP-1 Track LED 1-4
     disp=$(printf '%s%s %s%s  %-4s  %s%s%s%s%s' "$col" "$icon" "$lab" "$RST" "$wait" "$col" "$s" "$RST" "$badge" "$mark")
-    printf '%d\t%d\t%s\t%s\n' "$rk" "$age" "$disp" "$s"
+    if [ -n "$tb" ]; then grp=0; key="$tb"; else grp=1; key="$rk"; fi   # SP-1-tracked pinned to top, in track order
+    printf '%d\t%d\t%d\t%s\t%s\n' "$grp" "$key" "$age" "$disp" "$s"
   done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null) \
-    | sort -t "$(printf '\t')" -k1,1n -k2,2nr | cut -f3,4
+    | sort -t "$(printf '\t')" -k1,1n -k2,2n -k3,3nr | cut -f4,5
 }
 
 case "${1:-}" in
