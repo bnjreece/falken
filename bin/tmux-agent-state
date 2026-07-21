@@ -51,7 +51,7 @@ if [ "$wcnt" -gt 0 ]; then
   txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
   parts+=("#[fg=colour150]● ${wcnt} ${txt}#[default]")
 fi
-[ "$done_n" -gt 0 ] && parts+=("#[fg=colour244]✓ ${done_n}#[default]")
+[ "$done_n" -gt 0 ] && parts+=("#[fg=colour214,bold]✓ ${done_n}#[default]")
 [ "$wrapped_n" -gt 0 ] && parts+=("#[fg=colour240]■ ${wrapped_n}#[default]")
 
 out=""; i=0
