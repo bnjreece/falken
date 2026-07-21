@@ -42,6 +42,7 @@ bar_total=$(( needs_n + work_n + done_n + idle_n + wrapped_n ))
 bar=""
 if [ "$bar_total" -gt 0 ]; then
   bw=20
+  blk=$(printf '\342\226\210')                            # █ (U+2588), byte-exact regardless of locale
   bn=("$needs_n" "$work_n" "$done_n" "$idle_n" "$wrapped_n")
   bcol=(203 150 214 245 240)
   acc=0; drawn=0; k=0
@@ -50,7 +51,7 @@ if [ "$bar_total" -gt 0 ]; then
     target=$(( (acc * bw + bar_total / 2) / bar_total ))   # rounded cumulative → sum stays = bw
     cells=$(( target - drawn )); drawn=$target
     if [ "$cells" -gt 0 ]; then
-      seg=""; j=0; while [ "$j" -lt "$cells" ]; do seg="$seg█"; j=$(( j + 1 )); done
+      seg=""; j=0; while [ "$j" -lt "$cells" ]; do seg="$seg$blk"; j=$(( j + 1 )); done
       bar="$bar#[fg=colour${bcol[$k]}]$seg"
     fi
     k=$(( k + 1 ))

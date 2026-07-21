@@ -61,14 +61,15 @@ case "${1:-}" in
 esac
 
 TAB=$(printf '\t')
-# Full-height dynamic list (fills the popup); small ◉ reece.is on the bottom border.
+# Full-height dynamic list (fills the popup); small ◉ reece.is footer at the bottom.
+# alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
-    --height=100% --border=rounded \
-    --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
-    --color='label:51,border:238' \
+    --height=100% --border=rounded --color='border:240,footer:51' \
+    --footer='◉ reece.is' \
     --prompt='jump › ' --pointer='▶' --info=inline \
-    --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · esc cancel' \
+    --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close' \
+    --bind 'alt-s:abort' \
     --bind "ctrl-w,alt-w:execute-silent($self --wrap-toggle {2})+reload($self --list)" \
     --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
 
