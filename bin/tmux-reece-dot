@@ -17,5 +17,5 @@ if [ "$red" = 1 ]; then
   if [ $(( $(date +%s) % 2 )) -eq 0 ]; then printf '#[fg=colour167,bold]◉#[default]'
   else printf '#[fg=colour88]◉#[default]'; fi
 else
-  printf '#[fg=colour71]◉#[default]'                       # all clear → steady green
+  printf '#[fg=colour78]◉#[default]'                       # all clear → steady green
 fi

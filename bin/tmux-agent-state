@@ -73,7 +73,7 @@ wcnt=${#working[@]}
 if [ "$wcnt" -gt 0 ]; then
   shown=("${working[@]:0:3}"); more=$(( wcnt - 3 ))
   txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
-  parts+=("#[fg=colour71]● ${wcnt} ${txt}#[default]")
+  parts+=("#[fg=colour78]● ${wcnt} ${txt}#[default]")
 fi
 [ "$done_n" -gt 0 ] && parts+=("#[fg=colour178,bold]✓ ${done_n}#[default]")
 [ "$wrapped_n" -gt 0 ] && parts+=("#[fg=colour240]■ ${wrapped_n}#[default]")

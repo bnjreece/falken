@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # reece-help — cheat sheet for Falken, the reece.is agent board. (prefix = C-a)
 b=$'\e[1m'; d=$'\e[2m'; x=$'\e[0m'
-c=$'\e[38;5;51m'; g=$'\e[38;5;46m'; y=$'\e[38;5;220m'; r=$'\e[38;5;203m'; am=$'\e[38;5;214m'
-# teal -> cyan -> azure gradient rows for the wordmark
-L1=$'\e[38;2;0;255;200m'; L2=$'\e[38;2;0;235;225m'; L3=$'\e[38;2;40;210;250m'
-L4=$'\e[38;2;90;190;255m'; L5=$'\e[38;2;40;210;250m'
+c=$'\e[38;5;51m'; g=$'\e[38;5;78m'; y=$'\e[38;5;220m'; r=$'\e[38;5;167m'; am=$'\e[38;5;178m'
+# fleet-jewel rows for the FALKEN wordmark (256-color, WebSSH-safe)
+L1=$'\e[38;5;78m'; L2=$'\e[38;5;178m'; L3=$'\e[38;5;167m'
 cat <<EOF
 
-${L1}  ████ ████ ████ ████ ████     ███ ████${x}
-${L2}  █  █ █    █    █    █          █  █   ${x}
-${L3}  ███  ███  ███  █    ███        █  ████${x}
-${L4}  █ █  █    █    █    █          █     █${x}
-${L5}  █  █ ████ ████ ████ ████   █  ███ ████${x}
+${L1}   █▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █${x}
+${L2}   █▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█${x}
+${L3}   ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀${x}
 
   ${d}Falken · the falcon over your fleet${x}   ${b}·${x}   ${y}${b}esc or q to close${x}
 

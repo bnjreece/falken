@@ -8,9 +8,9 @@ set -uo pipefail
 A1=$'\033[38;5;214m'   # bright amber  (▸ arrows, chrome)  — 256-color, renders over WebSSH
 A2=$'\033[38;5;172m'   # mid amber     (labels)
 A3=$'\033[38;5;94m'    # dark amber    (░ static, rule)
-GRN=$'\033[38;5;71m'   # forest green (results — fleet 'working')
+GRN=$'\033[38;5;78m'   # forest green (results — fleet 'working')
 CUR=$'\033[38;5;230m'  # soft cream cursor
-W1=$'\033[38;5;71m'    # wordmark row 1 — forest (fleet working)   ┐
+W1=$'\033[38;5;78m'    # wordmark row 1 — forest (fleet working)   ┐
 W2=$'\033[38;5;178m'   # wordmark row 2 — gold   (fleet done)      ├ "fleet jewel"
 W3=$'\033[38;5;167m'   # wordmark row 3 — rose   (fleet needs)     ┘
 RST=$'\033[0m'; DIM=$'\033[2m'

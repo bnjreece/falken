@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # reece-help-view — splash + cheatsheet in a popup that closes on Esc/q (like the switcher),
 # and scrolls if it doesn't fit. Bound to Opt-i / C-a I.
-/Users/bnjmn/bin/falken --quick
 /Users/bnjmn/bin/reece-help | fzf --ansi --no-sort --reverse --disabled \
   --height=100% --no-info --prompt='' --pointer=' ' \
   --border=rounded --border-label=' ◉ reece.is ' --border-label-pos=3:bottom \
