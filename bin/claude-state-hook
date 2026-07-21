@@ -10,6 +10,7 @@ sess=$(tmux display -pt "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
 dir="$HOME/.claude/agent-state"; mkdir -p "$dir"; f="$dir/$sess"
 case "$ev" in
   UserPromptSubmit)  echo working > "$f" ;;                      # you gave it a task
+  PreToolUse)        echo working > "$f" ;;                      # actively using tools (clears stale needs after you answer)
   PermissionRequest) echo needs   > "$f" ;;                      # explicit approval gate
   Notification)
     # Claude Code fires Notification for TWO reasons: (a) it needs tool permission,

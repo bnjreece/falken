@@ -63,9 +63,9 @@ esac
 TAB=$(printf '\t')
 # Full-height dynamic list (fills the popup); small REECE.IS ascii wordmark as the footer.
 # alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
-FOOTER='▛▀▖▛▀▘▛▀▘▛▀▘▛▀▘   ▐ ▛▀▘
-▙▄▘▙▄ ▙▄ ▌  ▙▄    ▐ ▝▀▖
-▌ ▌▙▄▖▙▄▖▙▄▖▙▄▖ ▪ ▐ ▙▄▘'
+FOOTER='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
+█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█
+▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
     --height=100% --border=rounded --color='border:240,footer:51' \

@@ -5,11 +5,11 @@
 set -uo pipefail
 
 # --- palette (24-bit truecolor) ---
-A1=$'\033[38;2;255;176;0m'    # bright amber  (wordmark top, ▸ arrows)
-A2=$'\033[38;2;204;122;0m'    # mid amber     (wordmark mid, labels)
-A3=$'\033[38;2;122;74;0m'     # dark amber    (wordmark bottom, ░ static, rule)
-GRN=$'\033[38;2;51;255;51m'   # terminal green (results)
-CUR=$'\033[38;2;255;236;204m' # soft-white cursor
+A1=$'\033[38;5;214m'   # bright amber  (wordmark top, ▸ arrows)  — 256-color, renders over WebSSH
+A2=$'\033[38;5;172m'   # mid amber     (wordmark mid, labels)
+A3=$'\033[38;5;94m'    # dark amber    (wordmark bottom, ░ static, rule)
+GRN=$'\033[38;5;46m'   # terminal green (results)
+CUR=$'\033[38;5;230m'  # soft cream cursor
 RST=$'\033[0m'; DIM=$'\033[2m'
 HIDE=$'\033[?25l'; SHOW=$'\033[?25h'; CLR=$'\033[2J\033[H'
 
