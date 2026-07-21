@@ -19,7 +19,7 @@ human() {  # seconds -> Xs / Xm / Xh
 list() {
   local now cur R G D Y W DIM RST s st age f mt icon col lab rk wait mark disp tracked
   now=$(date +%s); cur=$(tmux display -p '#{session_name}' 2>/dev/null)
-  R=$'\033[38;5;203m'; G=$'\033[38;5;150m'; D=$'\033[38;5;214m'   # done = amber (review me)
+  R=$'\033[38;5;167m'; G=$'\033[38;5;71m'; D=$'\033[38;5;178m'   # done = amber (review me)
   Y=$'\033[38;5;180m'; W=$'\033[38;5;240m'; DIM=$'\033[2m'; RST=$'\033[0m'
   while IFS= read -r s; do
     [ -n "$s" ] || continue
@@ -68,7 +68,7 @@ FOOTER='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
 ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
-    --height=100% --border=rounded --color='border:240,footer:214,prompt:214,pointer:214,info:246' \
+    --height=100% --border=rounded --color='border:240,footer:178,prompt:178,pointer:178,info:246' \
     --footer="$FOOTER" --footer-border=line \
     --prompt='jump › ' --pointer='▶' --info=inline \
     --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close' \

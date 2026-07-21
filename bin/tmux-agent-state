@@ -44,7 +44,7 @@ if [ "$bar_total" -gt 0 ]; then
   bw=20
   blk=$(printf '\342\226\210')                            # █ (U+2588), byte-exact regardless of locale
   bn=("$needs_n" "$work_n" "$done_n" "$idle_n" "$wrapped_n")
-  bcol=(203 150 214 245 240)
+  bcol=(167 71 178 245 240)
   acc=0; drawn=0; k=0
   while [ "$k" -lt 5 ]; do
     acc=$(( acc + ${bn[$k]} ))
@@ -67,15 +67,15 @@ nc=${#needs_disp[@]}
 if [ "$nc" -gt 0 ]; then
   shown=("${needs_disp[@]:0:4}"); more=$(( nc - 4 ))
   txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
-  parts+=("#[fg=colour203,bold]✋ ${nc} ${txt}#[default]")
+  parts+=("#[fg=colour167,bold]✋ ${nc} ${txt}#[default]")
 fi
 wcnt=${#working[@]}
 if [ "$wcnt" -gt 0 ]; then
   shown=("${working[@]:0:3}"); more=$(( wcnt - 3 ))
   txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
-  parts+=("#[fg=colour150]● ${wcnt} ${txt}#[default]")
+  parts+=("#[fg=colour71]● ${wcnt} ${txt}#[default]")
 fi
-[ "$done_n" -gt 0 ] && parts+=("#[fg=colour214,bold]✓ ${done_n}#[default]")
+[ "$done_n" -gt 0 ] && parts+=("#[fg=colour178,bold]✓ ${done_n}#[default]")
 [ "$wrapped_n" -gt 0 ] && parts+=("#[fg=colour240]■ ${wrapped_n}#[default]")
 
 out=""; i=0

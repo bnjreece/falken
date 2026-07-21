@@ -14,8 +14,8 @@ if [ -d "$dir" ]; then
 fi
 if [ "$red" = 1 ]; then
   # pulse: alternate bright/dim red each second (needs your attention)
-  if [ $(( $(date +%s) % 2 )) -eq 0 ]; then printf '#[fg=colour196,bold]◉#[default]'
-  else printf '#[fg=colour124]◉#[default]'; fi
+  if [ $(( $(date +%s) % 2 )) -eq 0 ]; then printf '#[fg=colour167,bold]◉#[default]'
+  else printf '#[fg=colour88]◉#[default]'; fi
 else
-  printf '#[fg=colour46]◉#[default]'                       # all clear → steady green
+  printf '#[fg=colour71]◉#[default]'                       # all clear → steady green
 fi

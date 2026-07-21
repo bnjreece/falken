@@ -5,11 +5,14 @@
 set -uo pipefail
 
 # --- palette (24-bit truecolor) ---
-A1=$'\033[38;5;214m'   # bright amber  (wordmark top, ▸ arrows)  — 256-color, renders over WebSSH
-A2=$'\033[38;5;172m'   # mid amber     (wordmark mid, labels)
-A3=$'\033[38;5;94m'    # dark amber    (wordmark bottom, ░ static, rule)
-GRN=$'\033[38;5;46m'   # terminal green (results)
+A1=$'\033[38;5;214m'   # bright amber  (▸ arrows, chrome)  — 256-color, renders over WebSSH
+A2=$'\033[38;5;172m'   # mid amber     (labels)
+A3=$'\033[38;5;94m'    # dark amber    (░ static, rule)
+GRN=$'\033[38;5;71m'   # forest green (results — fleet 'working')
 CUR=$'\033[38;5;230m'  # soft cream cursor
+W1=$'\033[38;5;71m'    # wordmark row 1 — forest (fleet working)   ┐
+W2=$'\033[38;5;178m'   # wordmark row 2 — gold   (fleet done)      ├ "fleet jewel"
+W3=$'\033[38;5;167m'   # wordmark row 3 — rose   (fleet needs)     ┘
 RST=$'\033[0m'; DIM=$'\033[2m'
 HIDE=$'\033[?25l'; SHOW=$'\033[?25h'; CLR=$'\033[2J\033[H'
 
@@ -39,9 +42,9 @@ if [ -d "$sdir" ]; then
 fi
 
 band(){ printf ' %s░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░%s\n' "$A3" "$RST"; }
-wm1(){  printf '   %s█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █%s\n' "$A1" "$RST"; }
-wm2(){  printf '   %s█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█%s\n' "$A2" "$RST"; }
-wm3(){  printf '   %s▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀%s\n' "$A3" "$RST"; }
+wm1(){  printf '   %s█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █%s\n' "$W1" "$RST"; }
+wm2(){  printf '   %s█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█%s\n' "$W2" "$RST"; }
+wm3(){  printf '   %s▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀%s\n' "$W3" "$RST"; }
 rule(){ printf '   %s▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔%s %s%sreece.is/falken%s\n' "$A3" "$RST" "$DIM" "$A2" "$RST"; }
 head_(){ printf '  %s%sresearch terminal%s              %srev %s%s\n\n' "$DIM" "$A3" "$RST" "$A3" "$rev" "$RST"; }
 ck(){ # label, result, [result-color]

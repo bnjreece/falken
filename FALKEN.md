@@ -25,6 +25,7 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 - **Effort:** ~30–45 min. **Open Qs:** ntfy.sh vs self-hosted; quiet hours; whether to also cover `csd` sessions.
 
 ### Other parked ideas
+- **Help/switcher = FALKEN wordmark, no animation** (do once the new wordmark is picked) — `Opt-i` must go STRAIGHT to help (drop the `falken --quick` splash preamble in `reece-help-view`); the help header shows the new **FALKEN** wordmark, not the old REECE.IS cyan art. **Rule: the full logo + animation is seen ONLY when spawning a new session (`cs`/`csd`); help + switcher use static small wordmarks. Status bar keeps `reece.is` (the brand).**
 - **`◉` dot pulse** — animate the reece dot (blink) when something needs you, not just static red.
 - **Rate-limit meter** — Max window % + Sol window % in the status bar (from a ledger).
 - **Unify with SP-1 LEDs** — same hook state drives the feldd-cc LEDs + this bar (one board, physical + software).
