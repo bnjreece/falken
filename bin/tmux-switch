@@ -61,12 +61,15 @@ case "${1:-}" in
 esac
 
 TAB=$(printf '\t')
-# Full-height dynamic list (fills the popup); small ◉ reece.is footer at the bottom.
+# Full-height dynamic list (fills the popup); small REECE.IS ascii wordmark as the footer.
 # alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
+FOOTER='▛▀▖▛▀▘▛▀▘▛▀▘▛▀▘  ▐ ▛▀▘
+▙▄▘▙▄ ▙▄ ▌  ▙▄   ▐ ▝▀▖
+▌ ▌▙▄▖▙▄▖▙▄▖▙▄▖  ▐ ▙▄▘'
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
     --height=100% --border=rounded --color='border:240,footer:51' \
-    --footer='◉ reece.is' \
+    --footer="$FOOTER" --footer-border=line \
     --prompt='jump › ' --pointer='▶' --info=inline \
     --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close' \
     --bind 'alt-s:abort' \
