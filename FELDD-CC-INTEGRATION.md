@@ -59,6 +59,7 @@ Since we're *editing feldd-cc*, every button is rebindable (the config-only play
 - **BLE:** pair in macOS System Settings; attach via CoreBluetooth `retrieveConnectedPeripherals` (not scan).
 - **Side LEDs 4-7** addressable like main ones, *unless* a `FELDD_MODE_LED_SINGLE` firmware build is flashed (folds them to one pin). Confirm the build.
 - Push ≤20 Hz, dedupe unchanged frames, 20-byte ATT MTU.
+- **Pane-less hooks = phantom Track LEDs (FIXED 2026-07-21).** Falken is a *tmux* fleet board. A hook with no `$TMUX_PANE` (an auto-memory write from `~/.claude/projects/.../memory` firing SessionStart/Notification) minted a `tmux`-less board record named from the cwd basename (`memory`) that **neither prune could evict** (both key off a tmux name) — it fast-blinked a Track LED forever. Fix: `settings.json` `/hook` curls guard on `$TMUX_PANE` (like `claude-state-hook` already did) **and** `apply_hook` drops pane-less hooks under Falken. Only tmux-bound sessions ever claim a Track LED.
 
 ## Key files
 `feldd_cc.py` (daemon + `/hook` + render loop + button dispatch) · `sp1_console/protocol.py` (wire codec) · `sp1_console/transport.py` + `cb_transport.py` (USB/BLE) · `firmware/app/src/{protocol.c,led.c,led_override.c}` (device truth) · `~/bin/claude-state-hook` (writes `agent-state`).
