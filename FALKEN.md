@@ -27,7 +27,11 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 ### Other parked ideas
 - **Help/switcher = FALKEN wordmark, no animation** (do once the new wordmark is picked) — `Opt-i` must go STRAIGHT to help (drop the `falken --quick` splash preamble in `reece-help-view`); the help header shows the new **FALKEN** wordmark, not the old REECE.IS cyan art. **Rule: the full logo + animation is seen ONLY when spawning a new session (`cs`/`csd`); help + switcher use static small wordmarks. Status bar keeps `reece.is` (the brand).**
 - **`◉` dot pulse** — animate the reece dot (blink) when something needs you, not just static red.
-- **Rate-limit meter** — Max window % + Sol window % in the status bar (from a ledger).
+- **📊 Usage meter (far-right of status bar)** — spec'd 2026-07-20. Show current-window token usage for Claude + Sol. **No official rate-limit % is exposed by either CLI**, so show **raw window tokens** (honest); add `% of a budget you set` later if wanted.
+  - **Claude:** use **`ccusage`** (`npx ccusage@latest blocks --active --json`, or `brew install ccusage`) → active 5h-block `totalTokens`. **Do NOT hand-parse `~/.claude/projects/*.jsonl` naively** — cache-read tokens + whole-session histories inflate it to *billions* (verified: a quick parse returned 37B). Let ccusage do the windowing + token formula.
+  - **Sol:** parse `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` → `total_token_usage` (running per-session total); sum today's/active rollouts. Caveat: only counts Sol runs **on the mini**, not phone/other ChatGPT.
+  - **Architecture:** a **60s cron** updater writes a cache (`~/.falken/usage`); the `status-right` segment just **reads the cache** (never run node every 1s).
+  - **Display:** `⧗ CLA 1.2M · SOL 340k` (raw), far right. **Effort ~30-45 min; build fresh** (self-contained, correctness-sensitive).
 - **Unify with SP-1 LEDs** — same hook state drives the feldd-cc LEDs + this bar (one board, physical + software).
 - **macOS desktop notification** on `✋` (local, no phone needed).
 - **`csd` red danger theme** — red status bar when in a skip-permissions session.
