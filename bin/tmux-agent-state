@@ -6,7 +6,7 @@ dir="$HOME/.claude/agent-state"
 now=$(date +%s)
 total=$(tmux list-sessions 2>/dev/null | wc -l | tr -d ' ')
 
-needs_line=(); working=(); done_n=0; wrapped_n=0
+needs_line=(); working=(); done_n=0; wrapped_n=0; idle_n=0
 if [ -d "$dir" ]; then
   for f in "$dir"/*; do
     [ -e "$f" ] || continue
@@ -20,8 +20,7 @@ if [ -d "$dir" ]; then
       working)   working+=("$name") ;;
       done)      done_n=$(( done_n + 1 )) ;;
       wrapped)   wrapped_n=$(( wrapped_n + 1 )) ;;
-      # idle → intentionally NOT shown (noise floor; visible as ○ in the switcher).
-      # So chips sum to ≤ "N sess"; the difference is idle.
+      idle)      idle_n=$(( idle_n + 1 )) ;;   # counted for the state bar only, not a chip
     esac
   done
 fi
@@ -36,7 +35,31 @@ if [ ${#needs_line[@]} -gt 0 ]; then
   done < <(printf '%s\n' "${needs_line[@]}" | sort -rn)
 fi
 
+# stacked state bar: proportion of every session in each state (fills to 100%),
+# colored red=needs · green=working · amber=done · grey=idle · dk-grey=wrapped.
+needs_n=${#needs_line[@]}; work_n=${#working[@]}
+bar_total=$(( needs_n + work_n + done_n + idle_n + wrapped_n ))
+bar=""
+if [ "$bar_total" -gt 0 ]; then
+  bw=20
+  bn=("$needs_n" "$work_n" "$done_n" "$idle_n" "$wrapped_n")
+  bcol=(203 150 214 245 240)
+  acc=0; drawn=0; k=0
+  while [ "$k" -lt 5 ]; do
+    acc=$(( acc + ${bn[$k]} ))
+    target=$(( (acc * bw + bar_total / 2) / bar_total ))   # rounded cumulative → sum stays = bw
+    cells=$(( target - drawn )); drawn=$target
+    if [ "$cells" -gt 0 ]; then
+      seg=""; j=0; while [ "$j" -lt "$cells" ]; do seg="$seg█"; j=$(( j + 1 )); done
+      bar="$bar#[fg=colour${bcol[$k]}]$seg"
+    fi
+    k=$(( k + 1 ))
+  done
+  bar="$bar#[default]"
+fi
+
 parts=()
+[ -n "$bar" ] && parts+=("$bar")
 [ -n "$total" ] && [ "$total" -gt 0 ] && parts+=("#[fg=colour245]${total} sess#[default]")
 
 nc=${#needs_disp[@]}
