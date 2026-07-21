@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# falken — Falken boot splash: amber-CRT "research terminal" (Concept 3 by Fable).
+# Multi-color truecolor. rev = Falken repo commit count. reece.is/falken.
+# Args: --quick (short, for session start), --loop, -h. bash 3.2 safe.
+set -uo pipefail
+
+# --- palette (24-bit truecolor) ---
+A1=$'\033[38;2;255;176;0m'    # bright amber  (wordmark top, ▸ arrows)
+A2=$'\033[38;2;204;122;0m'    # mid amber     (wordmark mid, labels)
+A3=$'\033[38;2;122;74;0m'     # dark amber    (wordmark bottom, ░ static, rule)
+GRN=$'\033[38;2;51;255;51m'   # terminal green (results)
+CUR=$'\033[38;2;255;236;204m' # soft-white cursor
+RST=$'\033[0m'; DIM=$'\033[2m'
+HIDE=$'\033[?25l'; SHOW=$'\033[?25h'; CLR=$'\033[2J\033[H'
+
+# non-tty guard: plain line, no escapes
+if [ ! -t 1 ]; then printf 'FALKEN · reece.is/falken — the falcon over your fleet\n'; exit 0; fi
+
+quick=0; loop=0
+for a in "$@"; do case "$a" in
+  --quick) quick=1 ;; --loop) loop=1 ;;
+  -h|--help) printf 'usage: falken [--quick] [--loop]\n'; exit 0 ;;
+esac; done
+
+cleanup(){ printf '%s' "$SHOW$RST"; }
+trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+printf '%s' "$HIDE"
+
+# --- live bits: rev = commit count; flock counts from agent-state ---
+rev=$(git -C "$HOME/bnjmn/falken" rev-list --count HEAD 2>/dev/null); [ -n "$rev" ] || rev=1
+sdir="$HOME/.claude/agent-state"; aloft=0; rest=0
+if [ -d "$sdir" ]; then
+  for f in "$sdir"/*; do [ -e "$f" ] || continue
+    case "$(cat "$f" 2>/dev/null)" in
+      needs|working|done) aloft=$((aloft+1)) ;;
+      idle|wrapped)       rest=$((rest+1)) ;;
+    esac
+  done
+fi
+
+band(){ printf ' %s░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░%s\n' "$A3" "$RST"; }
+wm1(){  printf '   %s█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █%s\n' "$A1" "$RST"; }
+wm2(){  printf '   %s█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█%s\n' "$A2" "$RST"; }
+wm3(){  printf '   %s▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀%s\n' "$A3" "$RST"; }
+rule(){ printf '   %s▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔%s %s%sreece.is/falken%s\n' "$A3" "$RST" "$DIM" "$A2" "$RST"; }
+head_(){ printf '  %s%sresearch terminal%s              %srev %s%s\n\n' "$DIM" "$A3" "$RST" "$A3" "$rev" "$RST"; }
+ck(){ # label, result, [result-color]
+  local lbl="$1" res="$2" col="${3:-$GRN}" pad="$1 "
+  while [ ${#pad} -lt 22 ]; do pad="$pad."; done
+  printf '   %s▸%s %s%s%s %s%s%s\n' "$A1" "$RST" "$A2" "$pad" "$RST" "$col" "$res" "$RST"
+}
+
+# render(wordmark rows 0-3, checklist lines 0-4, cursor 0/1)
+render(){
+  local w="$1" c="$2" cur="${3:-1}"
+  printf '%s' "$CLR"; band; head_
+  [ "$w" -ge 1 ] && wm1 || printf '\n'
+  [ "$w" -ge 2 ] && wm2 || printf '\n'
+  [ "$w" -ge 3 ] && wm3 || printf '\n'
+  rule; printf '\n'
+  [ "$c" -ge 1 ] && ck "waking up"           "hello"                        || printf '\n'
+  [ "$c" -ge 2 ] && ck "your flock"          "$aloft aloft · $rest at rest" || printf '\n'
+  [ "$c" -ge 3 ] && ck "keeping watch"       "always"                       || printf '\n'
+  if   [ "$c" -ge 4 ] && [ "$cur" = 1 ]; then ck "here if you need me" "▊" "$CUR"
+  elif [ "$c" -ge 4 ];                    then ck "here if you need me" " " "$CUR"
+  else printf '\n'; fi
+  band
+}
+
+play(){
+  if [ "$quick" = 1 ]; then render 3 4 1; sleep 0.5; return; fi
+  render 1 0 0; sleep 0.10
+  render 2 0 0; sleep 0.10
+  render 3 0 0; sleep 0.20          # wordmark in
+  render 3 1 0; sleep 0.16
+  render 3 2 0; sleep 0.16
+  render 3 3 0; sleep 0.16
+  render 3 4 1; sleep 0.40          # checklist done
+  local i=0; while [ "$i" -lt 3 ]; do render 3 4 0; sleep 0.38; render 3 4 1; sleep 0.38; i=$((i+1)); done
+}
+
+if [ "$loop" = 1 ]; then while :; do play; done; else play; fi
