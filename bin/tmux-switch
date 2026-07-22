@@ -69,10 +69,10 @@ TAB=$(printf '\t')
 "$(dirname "$self")/tmux-track-badge" >/dev/null 2>&1 || true   # refresh SP-1 track map (cached)
 # Full-height dynamic list (fills the popup); small FALKEN ascii wordmark as the footer.
 # alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
-WORDMARK='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
-█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█
-▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
-# feldd-cc live/offline status, shown UNDER the FALKEN wordmark (only when feldd-cc is in use).
+W1='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █'
+W2='█▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█'
+W3='▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
+# feldd-cc live/offline status, tucked to the LOWER-RIGHT of the FALKEN wordmark (its baseline row).
 FSTAT=""
 if [ -f "$HOME/.claude/feldd-status" ]; then
   case "$(cat "$HOME/.claude/feldd-status" 2>/dev/null)" in
@@ -81,8 +81,8 @@ if [ -f "$HOME/.claude/feldd-status" ]; then
     *)        FSTAT=$'\033[38;5;240m○ feldd-cc offline\033[0m' ;;
   esac
 fi
-FOOTER="$WORDMARK"
-[ -n "$FSTAT" ] && FOOTER="$WORDMARK"$'\n'"$FSTAT"
+FOOTER="$W1"$'\n'"$W2"$'\n'"$W3"
+[ -n "$FSTAT" ] && FOOTER="$W1"$'\n'"$W2"$'\n'"$W3""     $FSTAT"
 HDR='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close'
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
