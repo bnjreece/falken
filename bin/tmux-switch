@@ -17,8 +17,10 @@ human() {  # seconds -> Xs / Xm / Xh
 }
 
 list() {
-  local now cur R G D Y W DIM RST s st age f mt icon col lab rk wait mark disp tracked
+  local now cur R G D Y W DIM RST s st age f mt icon col lab rk wait mark disp tracked FELDD tcol
   now=$(date +%s); cur=$(tmux display -p '#{session_name}' 2>/dev/null)
+  FELDD=$(cat "$HOME/.claude/feldd-status" 2>/dev/null || echo live)     # live | nodevice | offline
+  tcol=$'\033[38;5;230m'; [ "$FELDD" = live ] || tcol=$'\033[38;5;240m'  # dim Track badges when SP-1 isn't driven
   R=$'\033[38;5;167m'; G=$'\033[38;5;78m'; D=$'\033[38;5;178m'   # done = amber (review me)
   Y=$'\033[38;5;180m'; W=$'\033[38;5;240m'; DIM=$'\033[2m'; RST=$'\033[0m'
   while IFS= read -r s; do
@@ -40,7 +42,7 @@ list() {
     if [ "$tracked" = 1 ]; then wait=$(human "$age"); else wait=""; fi
     mark=""; [ "$s" = "$cur" ] && mark=" ${DIM}←here${RST}"
     tb=$(awk -F'\t' -v x="$s" '$2==x{print $1; exit}' "$HOME/.claude/agent-tracks" 2>/dev/null)
-    badge=""; [ -n "$tb" ] && badge=$'\033[38;5;230m'" [$tb]"$'\033[0m'   # SP-1 Track LED 1-4
+    badge=""; [ -n "$tb" ] && badge="$tcol"" [$tb]"$'\033[0m'   # SP-1 Track LED 1-4 (dim when feldd-cc offline)
     disp=$(printf '%s%s %s%s  %-4s  %s%s%s%s%s' "$col" "$icon" "$lab" "$RST" "$wait" "$col" "$s" "$RST" "$badge" "$mark")
     if [ -n "$tb" ]; then grp=0; key="$tb"; else grp=1; key="$rk"; fi   # SP-1-tracked pinned to top, in track order
     printf '%d\t%d\t%d\t%s\t%s\n' "$grp" "$key" "$age" "$disp" "$s"
@@ -70,12 +72,23 @@ TAB=$(printf '\t')
 FOOTER='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
 █▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█
 ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
+# feldd-cc live/offline banner at the top of the switcher (only shown when feldd-cc is in use).
+FSTAT=""
+if [ -f "$HOME/.claude/feldd-status" ]; then
+  case "$(cat "$HOME/.claude/feldd-status" 2>/dev/null)" in
+    live)     FSTAT=$'\033[38;5;78m● feldd-cc live\033[0m \033[38;5;240m· [N] = SP-1 Track\033[0m' ;;
+    nodevice) FSTAT=$'\033[38;5;178m◐ feldd-cc: SP-1 disconnected — wake the box\033[0m' ;;
+    *)        FSTAT=$'\033[38;5;240m○ feldd-cc offline (daemon down)\033[0m' ;;
+  esac
+fi
+HDR='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close'
+[ -n "$FSTAT" ] && HDR="$FSTAT"$'\n'"$HDR"
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
     --height=100% --border=rounded --color='border:240,footer:178,prompt:178,pointer:178,info:246' \
     --footer="$FOOTER" --footer-border=line \
     --prompt='jump › ' --pointer='▶' --info=inline \
-    --header='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close' \
+    --header="$HDR" \
     --bind 'alt-s:abort' \
     --bind "ctrl-w,alt-w:execute-silent($self --wrap-toggle {2})+reload($self --list)" \
     --bind "ctrl-x:execute($self --kill {2})+reload($self --list)")
