@@ -69,20 +69,21 @@ TAB=$(printf '\t')
 "$(dirname "$self")/tmux-track-badge" >/dev/null 2>&1 || true   # refresh SP-1 track map (cached)
 # Full-height dynamic list (fills the popup); small FALKEN ascii wordmark as the footer.
 # alt-s also aborts → Opt-s toggles the switcher open/closed (Esc always closes too).
-FOOTER='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
+WORDMARK='█▀▀▀ ▄▀▀▄ █    █ ▄▀ █▀▀▀ █▄ █
 █▀▀  █▀▀█ █    █▀▄  █▀▀  █ ▀█
 ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀'
-# feldd-cc live/offline banner at the top of the switcher (only shown when feldd-cc is in use).
+# feldd-cc live/offline status, shown UNDER the FALKEN wordmark (only when feldd-cc is in use).
 FSTAT=""
 if [ -f "$HOME/.claude/feldd-status" ]; then
   case "$(cat "$HOME/.claude/feldd-status" 2>/dev/null)" in
-    live)     FSTAT=$'\033[38;5;78m● feldd-cc live\033[0m \033[38;5;240m· [N] = SP-1 Track\033[0m' ;;
-    nodevice) FSTAT=$'\033[38;5;178m◐ feldd-cc: SP-1 disconnected — wake the box\033[0m' ;;
-    *)        FSTAT=$'\033[38;5;240m○ feldd-cc offline (daemon down)\033[0m' ;;
+    live)     FSTAT=$'\033[38;5;78m● feldd-cc live\033[0m' ;;
+    nodevice) FSTAT=$'\033[38;5;178m◐ feldd-cc · SP-1 disconnected\033[0m' ;;
+    *)        FSTAT=$'\033[38;5;240m○ feldd-cc offline\033[0m' ;;
   esac
 fi
+FOOTER="$WORDMARK"
+[ -n "$FSTAT" ] && FOOTER="$WORDMARK"$'\n'"$FSTAT"
 HDR='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close'
-[ -n "$FSTAT" ] && HDR="$FSTAT"$'\n'"$HDR"
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
     --height=100% --border=rounded --color='border:240,footer:178,prompt:178,pointer:178,info:246' \
