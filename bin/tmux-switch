@@ -82,7 +82,7 @@ if [ -f "$HOME/.claude/feldd-status" ]; then
   esac
 fi
 FOOTER="$W1"$'\n'"$W2"$'\n'"$W3"
-[ -n "$FSTAT" ] && FOOTER="$W1"$'\n'"$W2"$'\n'"$W3""     $FSTAT"
+[ -n "$FSTAT" ] && FOOTER="$W1"$'\n'"$W2"$'\n'"$W3""  $FSTAT"
 HDR='↑↓ move · type filter · ⏎ jump · ^W/⌥W wrap · ^X kill · ⌥s/esc close'
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
