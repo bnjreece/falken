@@ -82,3 +82,9 @@ Close the loop — surface feldd-cc's 4 Track-LED assignments back onto the scre
 4. `~/.tmux.conf`: add the badge `#()` to `status-left`.
 
 **Confirmed decisions:** bar = current session's track only · switcher = all four · badge = plain-but-distinct `[N]` · data = feldd-cc-writes-file (not HTTP).
+
+## Fleet-authoritative board + live/offline status (SHIPPED 2026-07-22)
+Two fixes after the board pinned *wrapped* sessions to Track LEDs while live ones sat off-board:
+- **Registration gap.** The board was hook-driven: a session started AFTER the daemon whose hooks arrive pane-less never registered, so feldd-cc never knew your active sessions and wrapped ones squatted the Tracks. `discover_new_sessions()` now runs **every state-watch pass** (not just at startup), pulling in any live `claude` tmux pane, seeded from its `agent-state` file. ADD-ONLY (skips known panes/names → never clobbers a live state to idle). The board follows the whole tmux fleet.
+- **Squatter gap.** Front-row self-correction was purely edge-driven (`_reclaim_front` / `_pull_active_to_front`) with timing holes. `_rebalance_front()` runs each pass: the 4 Track LEDs always hold the most-recently-active **non-parked** (working/done/needs) sessions; a wrapped/idle front session yields to any live one waiting on the bench/off-board. Stable in steady state (no LED churn).
+- **Live/offline status.** `/config` now returns `link: {up, transport}` (fed by `_on_link`). `tmux-track-badge` mirrors it into `~/.claude/feldd-status` (`live` | `nodevice` | `offline`); the switcher shows a top banner (`● feldd-cc live` / `◐ SP-1 disconnected` / `○ daemon down`) and **dims the `[N]` badges** when the box isn't actually being driven, so a stale track map never looks authoritative. `+5 tests (119 pass)`.
