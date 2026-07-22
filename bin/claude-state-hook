@@ -8,6 +8,16 @@ ev=$(printf '%s' "$payload" | grep -o '"hook_event_name":"[^"]*"' | head -1 | cu
 sess=$(tmux display -pt "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
 [ -n "$sess" ] || exit 0
 dir="$HOME/.claude/agent-state"; mkdir -p "$dir"; f="$dir/$sess"
+# `wrapped` is a deliberate park (Opt-w / SP-1 Vol-). Keep it STICKY: only an explicit human
+# re-engage (UserPromptSubmit) un-wraps it, or SessionEnd clears it. Background events
+# (PreToolUse / PermissionRequest / Notification / Stop) must NOT resurrect a parked session --
+# otherwise a stray Stop flips wrapped->done and it pops back onto a Track.
+if [ "$(cat "$f" 2>/dev/null)" = wrapped ]; then
+  case "$ev" in
+    UserPromptSubmit|SessionEnd) : ;;    # fall through (un-wrap on re-engage / clear on end)
+    *) exit 0 ;;                          # stay wrapped through every background event
+  esac
+fi
 case "$ev" in
   UserPromptSubmit)  echo working > "$f" ;;                      # you gave it a task
   PreToolUse)        echo working > "$f" ;;                      # actively using tools (clears stale needs after you answer)
