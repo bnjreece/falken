@@ -44,6 +44,31 @@ ${L3}   ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀${x}
   ${b}SPLASH${x}
     ${g}reece${x}  full  ·  ${g}reece --quick${x}  short  ·  ${g}reece --loop${x}  loop
 
+  ${b}SP-1 / feldd-cc${x} ${d}— the physical box mirrors your fleet ${x}${d}(switcher shows ${x}${g}● live${d} / ${x}${d}○ offline)${x}
+    ${d}feldd-cc bridges the agent board to the SP-1 over Bluetooth. The 4 front Track${x}
+    ${d}LEDs = your 4 most-recently-active sessions — the ${x}${b}[1]-[4]${x}${d} badges in the switcher.${x}
+
+    ${b}Track LEDs${x} ${d}— what each light means${x}
+      ${r}fast blink${x}   needs you
+      ${y}pulse${x}        working
+      ${am}solid${x}        done
+      ${d}off${x}          wrapped · idle · empty (parked, or nothing there)
+
+    ${b}Buttons${x}
+      ${g}Track 1-4${x}    jump to that session
+      ${g}FWD / RWD${x}    jog the triage queue — needs first, then done (oldest first)
+      ${g}Vol- / Vol+${x}  ${b}wrap${x} / ${b}unwrap${x} the focused session
+      ${g}Play${x}         send ${y}"continue"${x} to the focused session
+      ${d}when a session asks permission:  ${x}${g}Play${x}${d} = approve · ${x}${g}Vol-${x}${d} = deny${x}
+
+    ${b}Faders${x} ${d}(global — whole fleet)${x}
+      ${g}1${x}  autopilot on/off      ${d}down = off · up = auto-continue the fleet${x}
+      ${g}2${x}  autopilot duration    ${d}down = 5 min · mid = ~1 hr · up = forever${x}
+      ${g}3${x}  scroll within         ${d}scrub back through the focused session's output${x}
+      ${g}4${x}  scroll across         ${d}sweep a highlight over the fleet · Play to jump${x}
+
+    ${d}config panel: ${x}${g}localhost:9200/settings${x}${d}   ·   box asleep? tap a key on it to wake${x}
+
   ${d}scripts: ~/bin/{reece,tmux-agent-state,tmux-reece-dot,tmux-jump-needs,wrap,reece-help}${x}
   ${d}state: ~/.claude/agent-state/   hook: ~/bin/claude-state-hook   config: ~/.tmux.conf${x}
 
