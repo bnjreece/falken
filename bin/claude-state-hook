@@ -34,7 +34,18 @@ case "$ev" in
       *) : ;;                                                    # idle/other → leave state as-is
     esac
     ;;
-  Stop)         echo done > "$f" ;;                              # finished, ready for you
+  Stop)
+    # An AskUserQuestion / permission prompt pauses for you but fires no needs-hook — it lands as a
+    # Stop. If the pane's LAST lines show such a prompt, it's really "needs you" (blink), not done —
+    # so the SP-1 fast-blinks on a question, the exact needs-you moment. Match the footer at the
+    # bottom only, so a session merely mentioning these words isn't misread.
+    if tmux capture-pane -t "$TMUX_PANE" -p 2>/dev/null | grep -v '^[[:space:]]*$' | tail -4 \
+         | grep -qiE 'Enter to select.*(navigate|cancel)|Do you want to proceed'; then
+      echo needs > "$f"                                          # question on screen → blink
+    else
+      echo done  > "$f"                                          # finished, ready for you
+    fi
+    ;;
   SessionStart) echo idle > "$f" ;;
   SessionEnd)   rm -f "$f" ;;
 esac
