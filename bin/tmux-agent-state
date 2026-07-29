@@ -1,86 +1,71 @@
 #!/usr/bin/env bash
-# tmux-agent-state — Falken's agent board for the tmux status bar (bash 3.2 safe).
+# tmux-agent-state — Falken's agent board for the tmux status bar.
 #   N sess   ✋ needs (red, named, wait-time, longest-first)   ● working (green, named)
-#   ✓ done (dim, count)   ■ wrapped (dim, count)
-dir="$HOME/.claude/agent-state"
-now=$(date +%s)
+#   ✓ done (dim, count)   ■ wrapped (dim, count)   + a stacked state bar.
+# PERF: one python pass over the agent-state dir (was a per-file cat+stat+basename fork loop —
+# ~66 forks for 22 sessions, the 204ms status-bar hog). Now 1 tmux call + 1 python = 2 forks.
 total=$(tmux list-sessions 2>/dev/null | wc -l | tr -d ' ')
+exec python3 - "$total" <<'PY'
+import os, sys, time
+total = sys.argv[1] if len(sys.argv) > 1 else ""
+d = os.path.expanduser("~/.claude/agent-state")
+now = time.time()
+needs = []; working = []; done_n = wrapped_n = idle_n = 0
+try:
+    entries = sorted(os.listdir(d))            # sorted → same order as the old bash glob
+except OSError:
+    entries = []
+for name in entries:
+    p = os.path.join(d, name)
+    try:
+        st = open(p).read().strip()
+        mt = os.stat(p).st_mtime
+    except OSError:
+        continue
+    age = int(now - mt)
+    if st == "needs" and age > 28800:          # stale needs → idle (matches switcher)
+        st = "idle"
+    if st == "needs":     needs.append((age, name))
+    elif st == "working": working.append(name)
+    elif st == "done":    done_n += 1
+    elif st == "wrapped": wrapped_n += 1
+    elif st == "idle":    idle_n += 1
 
-needs_line=(); working=(); done_n=0; wrapped_n=0; idle_n=0
-if [ -d "$dir" ]; then
-  for f in "$dir"/*; do
-    [ -e "$f" ] || continue
-    name=$(basename "$f")
-    st=$(cat "$f" 2>/dev/null)
-    mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
-    age=$(( now - mt ))
-    [ "$st" = needs ] && [ "$age" -gt 28800 ] && st="idle"   # stale needs → idle; count everything else (matches switcher)
-    case "$st" in
-      needs)     needs_line+=("$age $name") ;;
-      working)   working+=("$name") ;;
-      done)      done_n=$(( done_n + 1 )) ;;
-      wrapped)   wrapped_n=$(( wrapped_n + 1 )) ;;
-      idle)      idle_n=$(( idle_n + 1 )) ;;   # counted for the state bar only, not a chip
-    esac
-  done
-fi
+def human(s):
+    return f"{s}s" if s < 60 else (f"{s//60}m" if s < 3600 else f"{s//3600}h")
 
-human(){ if [ "$1" -lt 60 ]; then echo "${1}s"; elif [ "$1" -lt 3600 ]; then echo "$(( $1/60 ))m"; else echo "$(( $1/3600 ))h"; fi; }
+needs.sort(reverse=True)                        # longest-waiting first
+needs_disp = [f"{nm} {human(a)}" for a, nm in needs]
 
-# needs sorted by age DESC (longest waiting first) → "name Xm"
-needs_disp=()
-if [ ${#needs_line[@]} -gt 0 ]; then
-  while IFS=' ' read -r a nm; do
-    [ -n "$nm" ] && needs_disp+=("$nm $(human "$a")")
-  done < <(printf '%s\n' "${needs_line[@]}" | sort -rn)
-fi
+parts = []
+# stacked state bar (red=needs · green=working · amber=done · grey=idle · dk-grey=wrapped),
+# cumulative rounding so the segments always sum to exactly bw cells.
+bar_total = len(needs) + len(working) + done_n + idle_n + wrapped_n
+if bar_total > 0:
+    bw = 20; blk = "█"
+    bn = [len(needs), len(working), done_n, idle_n, wrapped_n]
+    bcol = [167, 78, 178, 245, 240]
+    acc = drawn = 0; bar = ""
+    for k in range(5):
+        acc += bn[k]
+        target = (acc * bw + bar_total // 2) // bar_total
+        cells = target - drawn; drawn = target
+        if cells > 0:
+            bar += f"#[fg=colour{bcol[k]}]" + blk * cells
+    parts.append(bar + "#[default]")
 
-# stacked state bar: proportion of every session in each state (fills to 100%),
-# colored red=needs · green=working · amber=done · grey=idle · dk-grey=wrapped.
-needs_n=${#needs_line[@]}; work_n=${#working[@]}
-bar_total=$(( needs_n + work_n + done_n + idle_n + wrapped_n ))
-bar=""
-if [ "$bar_total" -gt 0 ]; then
-  bw=20
-  blk=$(printf '\342\226\210')                            # █ (U+2588), byte-exact regardless of locale
-  bn=("$needs_n" "$work_n" "$done_n" "$idle_n" "$wrapped_n")
-  bcol=(167 78 178 245 240)
-  acc=0; drawn=0; k=0
-  while [ "$k" -lt 5 ]; do
-    acc=$(( acc + ${bn[$k]} ))
-    target=$(( (acc * bw + bar_total / 2) / bar_total ))   # rounded cumulative → sum stays = bw
-    cells=$(( target - drawn )); drawn=$target
-    if [ "$cells" -gt 0 ]; then
-      seg=""; j=0; while [ "$j" -lt "$cells" ]; do seg="$seg$blk"; j=$(( j + 1 )); done
-      bar="$bar#[fg=colour${bcol[$k]}]$seg"
-    fi
-    k=$(( k + 1 ))
-  done
-  bar="$bar#[default]"
-fi
+if total and total != "0":
+    parts.append(f"#[fg=colour245]{total} sess#[default]")
+nc = len(needs_disp)
+if nc:
+    txt = " ".join(needs_disp[:4]) + (f" +{nc-4}" if nc > 4 else "")
+    parts.append(f"#[fg=colour167,bold]✋ {nc} {txt}#[default]")
+wc = len(working)
+if wc:
+    txt = " ".join(working[:3]) + (f" +{wc-3}" if wc > 3 else "")
+    parts.append(f"#[fg=colour78]● {wc} {txt}#[default]")
+if done_n:    parts.append(f"#[fg=colour178,bold]✓ {done_n}#[default]")
+if wrapped_n: parts.append(f"#[fg=colour240]■ {wrapped_n}#[default]")
 
-parts=()
-[ -n "$bar" ] && parts+=("$bar")
-[ -n "$total" ] && [ "$total" -gt 0 ] && parts+=("#[fg=colour245]${total} sess#[default]")
-
-nc=${#needs_disp[@]}
-if [ "$nc" -gt 0 ]; then
-  shown=("${needs_disp[@]:0:4}"); more=$(( nc - 4 ))
-  txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
-  parts+=("#[fg=colour167,bold]✋ ${nc} ${txt}#[default]")
-fi
-wcnt=${#working[@]}
-if [ "$wcnt" -gt 0 ]; then
-  shown=("${working[@]:0:3}"); more=$(( wcnt - 3 ))
-  txt="${shown[*]}"; [ "$more" -gt 0 ] && txt="$txt +$more"
-  parts+=("#[fg=colour78]● ${wcnt} ${txt}#[default]")
-fi
-[ "$done_n" -gt 0 ] && parts+=("#[fg=colour178,bold]✓ ${done_n}#[default]")
-[ "$wrapped_n" -gt 0 ] && parts+=("#[fg=colour240]■ ${wrapped_n}#[default]")
-
-out=""; i=0
-for p in "${parts[@]}"; do
-  [ "$i" -gt 0 ] && out="$out  "
-  out="$out$p"; i=$(( i + 1 ))
-done
-printf '%s' "$out"
+sys.stdout.buffer.write("  ".join(parts).encode("utf-8"))   # byte-exact UTF-8, locale-independent
+PY

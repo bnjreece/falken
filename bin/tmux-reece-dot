@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# tmux-reece-dot — the reece.is "live" dot; turns RED when any session needs you (bash 3.2 safe).
-dir="$HOME/.claude/agent-state"
-red=0
-if [ -d "$dir" ]; then
-  now=$(date +%s)
-  for f in "$dir"/*; do
-    [ -e "$f" ] || continue
-    [ "$(cat "$f" 2>/dev/null)" = "needs" ] || continue
-    mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
-    [ $(( now - mt )) -gt 28800 ] && continue
-    red=1; break
-  done
-fi
-if [ "$red" = 1 ]; then
-  # pulse: alternate bright/dim red each second (needs your attention)
-  if [ $(( $(date +%s) % 2 )) -eq 0 ]; then printf '#[fg=colour167,bold]◉#[default]'
-  else printf '#[fg=colour88]◉#[default]'; fi
-else
-  printf '#[fg=colour78]◉#[default]'                       # all clear → steady green
-fi
+# tmux-reece-dot — the reece.is "live" dot; turns RED (pulsing) when any session needs you.
+# PERF: one python pass over the agent-state dir (was a per-file cat+stat fork loop, ~82ms).
+exec python3 <<'PY'
+import os, sys, time
+d = os.path.expanduser("~/.claude/agent-state")
+now = time.time()
+red = False
+try:
+    for name in os.listdir(d):
+        p = os.path.join(d, name)
+        try:
+            if open(p).read().strip() != "needs":
+                continue
+            if now - os.stat(p).st_mtime > 28800:   # stale needs → ignore
+                continue
+        except OSError:
+            continue
+        red = True
+        break
+except OSError:
+    pass
+if red:                                              # pulse bright/dim red each second
+    s = "#[fg=colour167,bold]◉#[default]" if int(now) % 2 == 0 else "#[fg=colour88]◉#[default]"
+else:
+    s = "#[fg=colour78]◉#[default]"                  # all clear → steady green
+sys.stdout.buffer.write(s.encode("utf-8"))
+PY
