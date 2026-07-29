@@ -65,24 +65,26 @@ case "${1:-}" in
     # ■ wrapped ⇄ ✓ done (parked ↔ un-parked)
     if [ "$(cat "$dir/$s" 2>/dev/null)" = wrapped ]; then echo done > "$dir/$s"; else echo wrapped > "$dir/$s"; fi
     exit 0 ;;
-  --prompt)  # emit the fzf prompt string for a given filter (state words) -> chip prompt
-    flt="${2:-}"; chips=""
+  --prompt)  # emit the fzf prompt string for a filter -> named preset, else state chips
+    flt="${2:-}"
+    case "$flt" in
+      "needs working done") printf 'jump ✋●✓ active › ';  exit 0 ;;
+      "needs done")         printf 'jump ✋✓ dormant › ';  exit 0 ;;
+    esac
+    chips=""
     for s in $flt; do case "$s" in
       needs) chips="${chips}✋" ;; working) chips="${chips}●" ;; done) chips="${chips}✓" ;;
       wrapped) chips="${chips}■" ;; idle) chips="${chips}○" ;; esac
     done
     if [ -n "$chips" ]; then printf 'jump %s › ' "$chips"; else printf 'jump › '; fi
     exit 0 ;;
-  --cycle-filter)  # ^F: step the state filter through presets (all → needs → … → triage → all)
+  --cycle-filter)  # ^F: cycle the 3 meaningful presets → all → active → dormant → all
     FF="$HOME/.claude/falken-switcher-filter"; cur=$(cat "$FF" 2>/dev/null | tr -d '\n')
     case "$cur" in
-      "")           next="needs" ;;
-      needs)        next="working" ;;
-      working)      next="done" ;;
-      done)         next="wrapped" ;;
-      wrapped)      next="needs done" ;;   # triage
-      "needs done") next="" ;;
-      *)            next="" ;;             # any custom f: filter → back to all
+      "")                   next="needs working done" ;;   # active — everything live
+      "needs working done") next="needs done" ;;           # dormant — waiting on you, not churning
+      "needs done")         next="" ;;                      # all
+      *)                    next="" ;;                      # any custom f: filter → back to all
     esac
     printf '%s' "$next" > "$FF"
     printf 'reload(%s --list)+change-prompt(%s)' "$self" "$("$self" --prompt "$next")"
@@ -92,12 +94,12 @@ case "${1:-}" in
     case "$q" in
       f:*)
         spec="${q#f:}"; out=""
-        for tok in $spec; do                     # prefix-match each token to state name(s)
-          for stname in needs working done wrapped idle; do
-            case "$stname" in "$tok"*) out="$out $stname" ;; esac
+        for stname in needs working done wrapped idle; do    # canonical order → filter matches its label
+          for tok in $spec; do
+            case "$stname" in "$tok"*) out="$out $stname"; break ;; esac
           done
         done
-        out=$(printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' ' | sed 's/ *$//')
+        out=$(echo $out | sed 's/^ *//;s/ *$//')
         FF="$HOME/.claude/falken-switcher-filter"; printf '%s' "$out" > "$FF"
         printf 'clear-query+reload(%s --list)+change-prompt(%s)' "$self" "$("$self" --prompt "$out")"
         ;;
@@ -124,7 +126,7 @@ if [ -f "$HOME/.claude/feldd-status" ]; then
 fi
 FOOTER="$W1"$'\n'"$W2"$'\n'"$W3"
 [ -n "$FSTAT" ] && FOOTER="$W1"$'\n'"$W2"$'\n'"$W3""  $FSTAT"
-HDR='↑↓ move · type=search · ^F cycle filter · f:working⏎ set · ⏎ jump · ^W wrap · ^X kill · esc'
+HDR='↑↓ move · search · ^F all/active/dormant · f:… ⏎ custom filter · ⏎ jump · ^W wrap · ^X kill · esc'
 INITP=$("$self" --prompt "$(cat "$HOME/.claude/falken-switcher-filter" 2>/dev/null | tr -d '\n')")   # remembered filter
 pick=$("$self" --list | fzf --ansi --no-sort --reverse \
     --delimiter="$TAB" --with-nth=1 \
