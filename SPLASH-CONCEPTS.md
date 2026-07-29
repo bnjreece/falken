@@ -18,7 +18,7 @@ sweep trail `┊`, footer); radar cyan `0;229;255` (sweep arm `╱`, wordmark); 
       ▄▀▔    ┊     ▔▀▄        F A L K E N · high watch
     ▄▀   ·   ┊   ╱    ▀▄      ─────────────────────────
    ▐         ┊ ╱   ▲    ▌     ◉ feldd      building
-   ▐  ·      ◉      ·   ▌     ◉ iamkeen    ok
+   ▐  ·      ◉      ·   ▌     ◉ myapp    ok
    ▐       ·     ·      ▌     ◉ website    idle
     ▀▄        ·       ▄▀      ▲ scraper    NEEDS YOU
       ▀▄▁         ▁▄▀

@@ -73,7 +73,7 @@ Close the loop — surface feldd-cc's 4 Track-LED assignments back onto the scre
 
 **Display (confirmed):**
 - **Switcher — all four:** in `tmux-switch` `list()`, read `agent-tracks` and append a **plain, distinct badge `[1]`–`[4]`** to the 4 tracked sessions. Color = NOT a fleet-state color (e.g. cream `230`, bold) so it reads as "on the physical box." Other 16 sessions unbadged.
-- **Status bar — current only:** a small `bin/tmux-track-badge <session>` reads `agent-tracks` for the passed session → prints `[N]` (bright) or nothing. Wire into `status-left`: `... [#S]#(/Users/bnjmn/bin/tmux-track-badge #{session_name}) `.
+- **Status bar — current only:** a small `bin/tmux-track-badge <session>` reads `agent-tracks` for the passed session → prints `[N]` (bright) or nothing. Wire into `status-left`: `... [#S]#(~/bin/tmux-track-badge #{session_name}) `.
 
 **Build steps:**
 1. feldd-cc: write `~/.claude/agent-tracks` on board change (edit near the LED-assignment / board-mirror code; `/restart` to apply — the daemon is live). Do it on a branch, merge, `POST /restart`.

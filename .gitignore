@@ -1,1 +1,5 @@
 .claude/worktrees/
+
+# Local-only working docs — internal design specs / handoffs, NOT for the public repo
+GOLDEN-PATH-SPEC.md
+handoff/
