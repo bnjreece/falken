@@ -23,15 +23,16 @@ case "$ev" in
   PreToolUse)        echo working > "$f" ;;                      # actively using tools (clears stale needs after you answer)
   PermissionRequest) echo needs   > "$f" ;;                      # explicit approval gate
   Notification)
-    # Claude Code fires Notification for TWO reasons: (a) it needs tool permission,
-    # (b) the prompt has sat idle 60s. Only (a) is a real "needs you". Idle pings would
-    # falsely flag background-workflow / bypass-permission sessions (e.g. a running
-    # /workflow), so ignore them: a finished turn is already 'done' via Stop, and a busy
-    # one should stay 'working'.
+    # Claude Code fires Notification for (a) a tool-permission request, or (b) the prompt sitting
+    # idle ~60s. (a) is a real "needs you". (b) means the session is at the prompt, NOT actively
+    # generating -- so if it's still marked 'working', it has actually STOPPED (e.g. you
+    # INTERRUPTED it: an interrupt fires no Stop hook, freezing the state at 'working') and is
+    # waiting for you -> demote to done. Only touches 'working', so a session that legitimately
+    # went idle/done, or a parked one, is left alone.
     msg=$(printf '%s' "$payload" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
     case "$msg" in
       *permission*|*Permission*|*approval*|*Approval*) echo needs > "$f" ;;
-      *) : ;;                                                    # idle/other → leave state as-is
+      *) [ "$(cat "$f" 2>/dev/null)" = working ] && echo done > "$f" ;;   # idle ping: interrupted/stopped → done
     esac
     ;;
   Stop)
