@@ -63,7 +63,9 @@ case "${1:-}" in
   --wrap-toggle)
     s="${2:-}"; [ -n "$s" ] || exit 0
     # ■ wrapped ⇄ ✓ done (parked ↔ un-parked)
-    if [ "$(cat "$dir/$s" 2>/dev/null)" = wrapped ]; then echo done > "$dir/$s"; else echo wrapped > "$dir/$s"; fi
+    # un-wrap to `working` (NOT `done`) + clear the verify-red marker so the next Stop re-verifies
+    # before showing ✓ — a wrapped session must not launder a red tree to done via one chord.
+    if [ "$(cat "$dir/$s" 2>/dev/null)" = wrapped ]; then echo working > "$dir/$s"; rm -f "$HOME/.claude/falken/verify-red/$s" 2>/dev/null; else echo wrapped > "$dir/$s"; fi
     exit 0 ;;
   --prompt)  # emit the fzf prompt string for a filter -> named preset, else state chips
     flt="${2:-}"

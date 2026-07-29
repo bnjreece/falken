@@ -1,0 +1,85 @@
+#!/bin/bash
+# falken-lint-file — Falken PostToolUse(Write|Edit) lint hook (BUILD 1).
+#
+# Lints just the file the tool touched and feeds any findings back to the MODEL so it
+# self-corrects BEFORE the Stop verify gate fires. Non-blocking by nature: the tool has
+# already run, so PostToolUse exit 2 does NOT block — but it DOES surface stderr to the
+# model as context (exit-0 stderr goes only to the user transcript, so it must be exit 2).
+#
+# OPT-IN, same as the Stop gate: it only engages in a repo whose package.json carries a
+# `falken` key. Without that gate this would fire in EVERY eslint repo the moment the global
+# PostToolUse entry lands — including the deliberately-isolated ~/vendr-work checkouts.
+#
+# Reads the hook JSON payload on stdin. bash 3.2 safe. Idempotent / fail-safe: any tooling
+# problem is swallowed (exit 0) so a broken eslint never spams the model or wedges edits.
+
+payload=$(cat)
+command -v python3 >/dev/null 2>&1 || exit 0     # no safe parser -> no-op
+
+fp=$(printf '%s' "$payload" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(""); sys.exit(0)
+ti=d.get("tool_input") or {}
+print(ti.get("file_path") or "")' 2>/dev/null)
+[ -n "$fp" ] || exit 0
+[ -f "$fp" ] || exit 0
+
+# code files only; anything else is a silent no-op
+case "$fp" in
+  *.ts|*.tsx|*.js|*.jsx) : ;;
+  *) exit 0 ;;
+esac
+
+# Find the repo root (first ancestor with .git).
+root=""
+d=$(dirname "$fp")
+while [ -n "$d" ] && [ "$d" != "/" ]; do
+  if [ -e "$d/.git" ]; then root="$d"; break; fi
+  d=$(dirname "$d")
+done
+[ -n "$root" ] || exit 0
+[ -f "$root/package.json" ] || exit 0
+
+# OPT-IN gate: no-op unless this repo carries a `falken` key (keeps us out of Vendr et al.).
+hasf=$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    print("0"); sys.exit(0)
+print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json" 2>/dev/null)
+[ "$hasf" = "1" ] || exit 0
+
+# Resolve the repo-local eslint binary by walking UP from the file to the repo root (inclusive).
+# Deliberately NOT `npx --no-install eslint`: on a repo with no eslint that exits 1 with an npm
+# "missing packages" error that would be injected AS IF it were a lint finding.
+bin=""
+eroot=""
+d=$(dirname "$fp")
+while : ; do
+  if [ -x "$d/node_modules/.bin/eslint" ]; then bin="$d/node_modules/.bin/eslint"; eroot="$d"; break; fi
+  [ "$d" = "$root" ] && break                     # checked the repo root too; stop
+  [ "$d" = "/" ] && break
+  d=$(dirname "$d")
+done
+[ -n "$bin" ] || exit 0                           # no eslint installed -> no-op
+
+# Run eslint FROM the dir holding node_modules. ESLint v9 flat config (eslint.config.js) resolves
+# from cwd, not by walking up from the linted file: without this cd, an agent editing from a
+# subdir or a sibling worktree makes eslint fail to find the config, exit 2, and get silently
+# swallowed as a false-clean. cd makes flat-config resolution deterministic regardless of cwd.
+out=$( cd "$eroot" 2>/dev/null && "$bin" "$fp" 2>&1 ); rc=$?
+case "$rc" in
+  0)
+    exit 0 ;;                                     # clean
+  1)
+    # eslint exit 1 == real lint problems. Feed them to the model, then exit 2 (surfaces
+    # stderr; does NOT block because the tool already ran).
+    printf '%s\n' "$out" | tail -c 4096 >&2
+    printf '\n--- falken lint (eslint) flagged %s. Fix it before you finish; the Stop gate re-checks. ---\n' "$(basename "$fp")" >&2
+    exit 2 ;;
+  *)
+    # exit >=2 == eslint config/parse/spawn failure (tooling, not the user's code). Swallow.
+    exit 0 ;;
+esac

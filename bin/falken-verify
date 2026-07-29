@@ -1,0 +1,195 @@
+#!/bin/bash
+# falken-verify <repo-root> — Falken verify gate heavy lifter (BUILD 1).
+#
+# Runs a repo's tier-appropriate npm-script chain with its OWN wall-clock watchdog
+# and returns a CLASSIFICATION exit code. Called SYNCHRONOUSLY by claude-state-hook's
+# Stop branch; NEVER wired as its own parallel hook (that would race the state writer).
+#
+# Contract:
+#   arg1 = repo root (dir containing package.json + the falken key). Caller resolves it.
+#   stdout = the verify command's captured combined output (caller forwards to the model).
+#   stderr = human notes (unknown-tier warning, watchdog / env message).
+# Exit codes (the caller branches on these):
+#   0  GREEN  — chain passed, or (prototype only) no matching npm scripts ("no surface = pass").
+#   1  RED    — a genuine CODE failure (lint/typecheck/test non-zero). Caller blocks the stop.
+#   2  NOOP   — not a falken repo (no package.json / no falken key). Defensive; caller
+#              normally short-circuits before calling us.
+#   3  INFRA  — could NOT honestly verify: hit our watchdog, npm/op missing, op env could not
+#              be resolved, or a load-bearing repo declares no lint/typecheck/test script.
+#              Caller surfaces "needs" and does NOT force-continue. NEVER a code RED.
+#
+# bash 3.2 (/bin/bash 3.2.57): plain for-loops + [ ] tests + simple multi-line case only.
+# No [[ ]] with globs. jq is NOT used (python3 is the board's proven JSON reader). The chain is
+# run + watchdogged + process-group-reaped by a small python3 helper (see WATCHDOG_PY below),
+# which is more reliable than bash `set -m` on macOS and emits no job-control chatter.
+
+CEILING_PROTO=90       # prototype = lint only; a lint run should be quick.
+CEILING_LB=300         # load-bearing = lint+typecheck+test; give a real suite room.
+                       # BOTH must stay < the Stop hook `timeout` (360) so WE fire first and
+                       # classify honestly (exit 3) instead of Claude Code SIGKILLing the hook.
+PROBE_CEILING=12       # bound for the non-interactive op env probe.
+
+root="$1"
+[ -n "$root" ] || exit 2
+[ -f "$root/package.json" ] || exit 2
+command -v python3 >/dev/null 2>&1 || exit 2   # can't read tier safely -> treat as no-op (caller -> needs)
+
+# --- read status + tier + which recognized scripts exist, in ONE python pass ---
+# Emits "STATUS|tier|present" where STATUS in {ERR,NOKEY,BADSHAPE,OK} and present is a
+# comma list drawn from lint,typecheck,test. jq-free; python3 is the board's proven reader.
+meta=$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    print("ERR||"); sys.exit(0)
+if not isinstance(d,dict):
+    print("ERR||"); sys.exit(0)
+if "falken" not in d:
+    print("NOKEY||"); sys.exit(0)
+f=d.get("falken")
+scripts=d.get("scripts")
+if not isinstance(scripts,dict):
+    scripts={}
+present=",".join([s for s in ("lint","typecheck","test") if scripts.get(s)])
+if not isinstance(f,dict):
+    print("BADSHAPE||"+present); sys.exit(0)
+tier=f.get("tier","")
+if not isinstance(tier,str):
+    tier=""
+print("OK|"+tier+"|"+present)' "$root/package.json" 2>/dev/null)
+
+status=$(printf '%s' "$meta" | cut -d'|' -f1)
+tier=$(printf '%s' "$meta" | cut -d'|' -f2)
+present=$(printf '%s' "$meta" | cut -d'|' -f3)
+
+case "$status" in
+  ERR|NOKEY|'') exit 2 ;;   # can't confirm / not gated -> no-op (caller fails safe to needs)
+esac
+
+# --- tier -> mode (garbled value fails SAFE to load-bearing, never silently to lint-only) ---
+mode=proto
+if [ "$status" = "BADSHAPE" ]; then
+  mode=lb
+  printf 'falken: package.json "falken" is present but not an object; treating as load-bearing\n' >&2
+else
+  case "$tier" in
+    load-bearing) mode=lb ;;
+    ''|prototype) mode=proto ;;   # empty/absent -> prototype: the deliberate default
+    *)            mode=lb
+                  printf 'falken: unknown falken.tier=%s, treating as load-bearing\n' "$tier" >&2 ;;
+  esac
+fi
+
+# --- npm must exist, else this is infra (a bare 127 must NOT be read as a code RED) ---
+command -v npm >/dev/null 2>&1 || {
+  printf 'falken-verify: npm not on PATH (infra, not a code failure); cannot verify.\n'
+  printf 'falken-verify: ensure the hook environment includes the node/npm bin dir.\n' >&2
+  exit 3
+}
+
+# npm's update-notifier does a background registry check that adds ~15s of cold-start (measured;
+# and it can spike far higher, risking our watchdog + the Stop hook timeout) to a verify that
+# should take well under a second. Disable it and the funding/audit noise so verify is fast and
+# deterministic. These only shape npm's own chatter/telemetry, never the tested code's behavior.
+export npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false NO_UPDATE_NOTIFIER=1
+
+# --- command chain (npm-script indirection; --if-present => "no script = green") ---
+# build is DELIBERATELY excluded (exceeds the watchdog; needs op-run env we do not carry).
+if [ "$mode" = "lb" ]; then
+  # A load-bearing repo that declares NONE of lint/typecheck/test must NOT vacuously pass:
+  # "no surface = green" is honest for a spike, dishonest for money/auth code.
+  if [ -z "$present" ]; then
+    printf 'falken-verify: load-bearing repo declares no lint/typecheck/test npm script; nothing to verify.\n'
+    printf 'falken-verify: add at least one of "lint", "typecheck", or "test" to package.json scripts.\n' >&2
+    exit 3
+  fi
+  chain='npm run lint --if-present && npm run typecheck --if-present && npm run test --if-present'
+  ceiling=$CEILING_LB
+else
+  chain='npm run lint --if-present'
+  ceiling=$CEILING_PROTO
+fi
+
+# --- env wrap (LOAD-BEARING ONLY): resolve op:// refs so tests needing DATABASE_URL / keys
+#     pass honestly. Lint (prototype) needs no secrets, so it is NEVER wrapped.
+#     An env/auth failure is INFRA (exit 3), NEVER a code RED, and must NOT hang on biometric.
+env_prefix=""
+if [ "$mode" = "lb" ] && [ -f "$root/.env.local" ] && command -v op >/dev/null 2>&1 \
+   && grep -q 'op://' "$root/.env.local" 2>/dev/null; then
+  # op can only run non-interactively (no biometric prompt to hang on) with a service-account
+  # token. Without one, a hook (always non-TTY) would block until our watchdog -> refuse up front.
+  if [ -z "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
+    printf 'falken-verify: repo needs op:// env but OP_SERVICE_ACCOUNT_TOKEN is not set in the hook context; cannot verify honestly.\n'
+    printf 'falken-verify: load-bearing verify requires the 1Password service-account token with this repo vault access.\n' >&2
+    exit 3
+  fi
+  # Bounded, non-interactive probe: does op actually resolve THIS repo's refs here?
+  probe_ok=1
+  ( cd "$root" 2>/dev/null && op run --env-file=.env.local -- true ) >/dev/null 2>&1 &
+  pp=$!
+  pi=0
+  while kill -0 "$pp" 2>/dev/null; do
+    if [ "$pi" -ge "$PROBE_CEILING" ]; then kill -KILL "$pp" 2>/dev/null; probe_ok=0; break; fi
+    sleep 1
+    pi=$((pi + 1))
+  done
+  if [ "$probe_ok" = "1" ]; then
+    wait "$pp" 2>/dev/null; probe_ok=$?
+  else
+    wait "$pp" 2>/dev/null
+    probe_ok=1000   # timed out
+  fi
+  if [ "$probe_ok" != "0" ]; then
+    printf 'falken-verify: op env could not be resolved in the hook context (vault scope, auth, or timeout); cannot verify honestly.\n'
+    printf 'falken-verify: check the service-account grant for this repo vault, then re-run.\n' >&2
+    exit 3
+  fi
+  env_prefix="op run --env-file=.env.local --"
+fi
+
+# --- run the chain under a python3 watchdog ---
+# macOS ships no timeout/gtimeout/setsid, and bash `set -m` group-kill both (a) leaks async
+# "Terminated" job-control chatter into the model's fix-context and (b) MISSES grandchildren
+# because npm re-parents the script into its own process group, escaping "kill -- -$job".
+# python3 is already a hard dependency here, so we delegate run+timeout+group-reap to it:
+#   start_new_session=True -> child is its OWN session/group leader (pgid == child pid);
+#   os.killpg(TERM) then (KILL) reaps the whole npm->node->worker subtree, TERM-ignorers included;
+#   no job-control notices are ever emitted.
+# The child's combined stdout/stderr flows straight to OUR stdout (the caller captures it).
+# Exit: 0 GREEN, 1 RED (child non-zero), 3 INFRA (spawn failure or watchdog timeout).
+WATCHDOG_PY='import os,sys,signal,subprocess,time
+cwd=sys.argv[1]
+timeout=float(sys.argv[2])
+cmd=sys.argv[3:]
+try:
+    p=subprocess.Popen(cmd, cwd=cwd, stdout=sys.stdout, stderr=subprocess.STDOUT, start_new_session=True)
+except Exception as e:
+    sys.stdout.write("falken-verify: could not start verify chain: %s\n" % e)
+    sys.stdout.flush()
+    sys.exit(3)
+try:
+    rc=p.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(p.pid, sig)
+        except Exception:
+            pass
+        if sig is signal.SIGTERM:
+            time.sleep(3)
+    try:
+        p.wait(timeout=5)
+    except Exception:
+        pass
+    sys.stdout.write("falken-verify: chain exceeded %ss watchdog and was terminated (hung or broken env).\n" % int(timeout))
+    sys.stdout.flush()
+    sys.exit(3)
+sys.stdout.flush()
+sys.exit(0 if rc==0 else 1)'
+
+if [ -n "$env_prefix" ]; then
+  python3 -c "$WATCHDOG_PY" "$root" "$ceiling" op run --env-file=.env.local -- sh -c "$chain"
+else
+  python3 -c "$WATCHDOG_PY" "$root" "$ceiling" sh -c "$chain"
+fi
+exit $?          # 0 GREEN / 1 RED / 3 INFRA, straight from the watchdog

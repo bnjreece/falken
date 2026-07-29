@@ -1,13 +1,38 @@
 #!/bin/bash
 # claude-state-hook — records the current tmux session's Claude agent state for the
-# tmux status bar. Wired as a Claude Code hook (see ~/.claude/settings.json).
-# Reads the hook JSON payload on stdin; keys state by tmux session name.
+# tmux status bar, AND (BUILD 1) is the single writer that runs the verify gate on Stop.
+# Wired as a Claude Code hook (see ~/.claude/settings.json). Reads the hook JSON payload
+# on stdin; keys state by tmux session name.
+#
+# WHY the gate lives HERE and not in a second parallel Stop hook: multiple hooks on one
+# event run in PARALLEL, unordered, all to completion, and THIS script is the SOLE writer of
+# ~/.claude/agent-state/<sess>. Verify is slow (~100s); the state write is fast (<1s). A
+# separate gate would let the fast state write land `done` before this turn's verify finishes
+# -> a green LED on a red tree. Race-free requires ONE process that knows the verdict AND
+# writes state AND sets the block/allow exit atomically -> this Stop branch, which calls the
+# `falken-verify` helper synchronously and then writes state + exits 2-or-0 itself.
 [ -n "$TMUX_PANE" ] || exit 0                                   # only meaningful inside tmux
 payload=$(cat)
 ev=$(printf '%s' "$payload" | grep -o '"hook_event_name":"[^"]*"' | head -1 | cut -d'"' -f4)
 sess=$(tmux display -pt "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
 [ -n "$sess" ] || exit 0
 dir="$HOME/.claude/agent-state"; mkdir -p "$dir"; f="$dir/$sess"
+
+# --- Falken verify-gate scratch (OUTSIDE agent-state so the board never mis-reads it) ---
+CDIR="$HOME/.claude/falken"
+TRIES_DIR="$CDIR/verify-tries"     # per-session retry counter
+RED_DIR="$CDIR/verify-red"         # per-sess "verify is red" reason marker
+VERIFYING_DIR="$CDIR/verifying"    # per-sess in-flight lock (guards parallel Notification demote)
+CAP=3                              # our OWN bound (<8 so it fires before any rumored built-in cap)
+
+# All gate scratch is keyed by the tmux SESSION NAME (one pane = one agent = one session), the
+# same key as the state file. Keying the counter by session_id instead would let wrap/human-gate
+# clear the red marker but NOT the counter (they know $sess, not $sid) -> a stale count survives.
+ckey="$sess"
+cf="$TRIES_DIR/$ckey"
+rmark="$RED_DIR/$sess"
+vlock="$VERIFYING_DIR/$sess"
+
 # `wrapped` is a deliberate park (Opt-w / SP-1 Vol-). Keep it STICKY: only an explicit human
 # re-engage (UserPromptSubmit) un-wraps it, or SessionEnd clears it. Background events
 # (PreToolUse / PermissionRequest / Notification / Stop) must NOT resurrect a parked session --
@@ -19,9 +44,11 @@ if [ "$(cat "$f" 2>/dev/null)" = wrapped ]; then
   esac
 fi
 case "$ev" in
-  UserPromptSubmit)  echo working > "$f" ;;                      # you gave it a task
-  PreToolUse)        echo working > "$f" ;;                      # actively using tools (clears stale needs after you answer)
-  PermissionRequest) echo needs   > "$f" ;;                      # explicit approval gate
+  UserPromptSubmit)                                             # you gave it a task
+    echo working > "$f"
+    rm -f "$cf" "$rmark" 2>/dev/null ;;                         # fresh human turn -> reset the gate counter
+  PreToolUse)        echo working > "$f" ;;                     # actively using tools (clears stale needs after you answer)
+  PermissionRequest) echo needs   > "$f" ;;                     # explicit approval gate
   Notification)
     # Claude Code fires Notification for (a) a tool-permission request, or (b) the prompt sitting
     # idle ~60s. (a) is a real "needs you". (b) means the session is at the prompt, NOT actively
@@ -32,22 +59,162 @@ case "$ev" in
     msg=$(printf '%s' "$payload" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
     case "$msg" in
       *permission*|*Permission*|*approval*|*Approval*) echo needs > "$f" ;;
-      *) [ "$(cat "$f" 2>/dev/null)" = working ] && echo done > "$f" ;;   # idle ping: interrupted/stopped → done
+      *)
+        # SEAL: an Esc-interrupt mid-red-retry can freeze state at 'working', and this idle
+        # Notification (a PARALLEL claude-state-hook, possibly firing DURING the blocking verify)
+        # would demote it to 'done' on a still-red tree. If a verify-red marker or an in-flight
+        # verify lock exists for this session, demote to 'needs' instead -> never a false green.
+        if [ "$(cat "$f" 2>/dev/null)" = working ]; then
+          if [ -f "$rmark" ] || [ -f "$vlock" ]; then echo needs > "$f"; else echo done > "$f"; fi
+        fi
+        ;;
     esac
     ;;
   Stop)
+    # ---- STEP 1: HUMAN-GATE WINS ----
     # An AskUserQuestion / permission prompt pauses for you but fires no needs-hook — it lands as a
-    # Stop. If the pane's LAST lines show such a prompt, it's really "needs you" (blink), not done —
-    # so the SP-1 fast-blinks on a question, the exact needs-you moment. Match the footer at the
-    # bottom only, so a session merely mentioning these words isn't misread.
+    # Stop. If the pane's LAST lines show such a prompt, it's really "needs you" (blink), not done.
+    # A pending human decision must NEVER be force-continued away by a verify block.
     if tmux capture-pane -t "$TMUX_PANE" -p 2>/dev/null | grep -v '^[[:space:]]*$' | tail -4 \
          | grep -qiE 'Enter to select.*(navigate|cancel)|Do you want to proceed'; then
       echo needs > "$f"                                          # question on screen → blink
-    else
-      echo done  > "$f"                                          # finished, ready for you
+      rm -f "$cf" "$rmark" 2>/dev/null
+      exit 0
     fi
+
+    # ---- STEP 2: OPT-IN (repo-root walk + falken key presence) ----
+    # Walk UP from the payload cwd to the first dir containing .git (the repo boundary). The walk
+    # itself needs NO python3 (pure filesystem), so a missing interpreter cannot silently un-gate.
+    cwd=$(printf '%s' "$payload" | grep -o '"cwd":"[^"]*"' | head -1 | cut -d'"' -f4)
+    root=""
+    wd="$cwd"
+    while [ -n "$wd" ] && [ "$wd" != "/" ]; do
+      if [ -e "$wd/.git" ]; then root="$wd"; break; fi
+      wd=$(dirname "$wd")
+    done
+    gated=0
+    if [ -n "$root" ] && [ -f "$root/package.json" ]; then
+      if command -v python3 >/dev/null 2>&1; then
+        hasf=$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    print("0"); sys.exit(0)
+print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json" 2>/dev/null)
+        [ "$hasf" = "1" ] && gated=1
+      else
+        # python3 unavailable: grep fallback so "can't tell" does not resolve to a false done.
+        # Matches a real key ("falken":) but not a dependency name like "falken-utils".
+        if grep -q '"falken"[[:space:]]*:' "$root/package.json" 2>/dev/null; then gated=1; fi
+      fi
+    fi
+    if [ "$gated" != "1" ]; then
+      echo done > "$f"                                          # un-gated repo / cockpit -> finished
+      exit 0
+    fi
+
+    # stop_hook_active: parsed via python3 (never grep an unquoted bool). BACKSTOP allow-signal
+    # only — it is NEVER used to authorize a block. Empty if python3 absent (backstop just no-ops).
+    sha=$(printf '%s' "$payload" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("0"); sys.exit(0)
+print("1" if d.get("stop_hook_active") is True else "0")' 2>/dev/null)
+
+    # ---- STEP 3: COUNTER, INCREMENT-FIRST ----
+    # Increment + record BEFORE verify runs, so the bound holds even if verify never returns
+    # (the hook timeout kills us, but the count already advanced -> the next stop moves toward CAP).
+    # Unlike the old design we DO still run verify at the cap (see STEP 4): the increment-first
+    # write is only a hang backstop, never a reason to skip the final check.
+    mkdir -p "$TRIES_DIR" "$RED_DIR" "$VERIFYING_DIR" 2>/dev/null
+    n=$(cat "$cf" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    n=$((n + 1))
+    if ! (echo "$n" > "$cf") 2>/dev/null; then
+      # cannot RECORD a block -> an unrecorded block is unbounded -> FAIL OPEN, surface.
+      echo needs > "$f"; rm -f "$rmark" 2>/dev/null
+      printf 'falken gate: could not write retry counter; failing open to needs.\n' >&2
+      exit 0
+    fi
+    rb=$(cat "$cf" 2>/dev/null)
+    if [ "$rb" != "$n" ]; then
+      echo needs > "$f"                                         # counter untrusted -> fail open
+      printf 'falken gate: retry counter readback mismatch; failing open to needs.\n' >&2
+      exit 0
+    fi
+
+    # BACKSTOP: CC says we are already in a forced-continue chain (stop_hook_active) yet the counter
+    # looks fresh -> it was lost/reset -> do NOT emit an unbounded block; surface instead.
+    if [ "$sha" = "1" ] && [ "$n" -le 1 ]; then
+      rm -f "$cf" 2>/dev/null; echo needs > "$f"
+      printf 'falken gate: stop_hook_active but counter reset; failing open to needs.\n' >&2
+      exit 0
+    fi
+
+    # ---- STEP 4: VERIFY (runs on EVERY attempt, including the cap attempt) ----
+    # Resolve falken-verify by ABSOLUTE path — hooks can run with a PATH that excludes ~/bin, and a
+    # bare "command not found" (rc 127) would be misread as RED and block spuriously. If the helper
+    # is genuinely missing, fail SAFE: surface as needs (never a false green, never a forced loop).
+    FV=$(command -v falken-verify 2>/dev/null)
+    [ -x "$FV" ] || FV="$HOME/bin/falken-verify"
+    [ -x "$FV" ] || FV="$HOME/bnjmn/falken/bin/falken-verify"
+    if [ ! -x "$FV" ]; then
+      rm -f "$cf" 2>/dev/null; echo needs > "$f"
+      printf 'falken gate: falken-verify helper not found; surfacing as needs (cannot verify).\n' >&2
+      exit 0
+    fi
+    : > "$vlock" 2>/dev/null
+    trap 'rm -f "$vlock" 2>/dev/null' EXIT       # vlock lives until THIS process exits (after the
+                                                 # state write below), sealing the false-green window.
+    out=$("$FV" "$root" 2>&1); rc=$?
+
+    # Respect an explicit HUMAN signal set DURING the ~100s verify window: if the user parked the
+    # session (wrapped) or a permission gate landed (needs) while verify ran, do NOT clobber it and
+    # do NOT force-continue past the human. Leave the state, allow the stop.
+    cur=$(cat "$f" 2>/dev/null)
+    if [ "$cur" = wrapped ] || [ "$cur" = needs ]; then
+      exit 0
+    fi
+
+    case "$rc" in
+      0)                                                        # GREEN
+        rm -f "$cf" "$rmark" 2>/dev/null
+        echo done > "$f"
+        exit 0 ;;
+      2)                                                        # falken-verify could not classify
+        # The caller already confirmed the falken key, so a NOOP here means the helper could not
+        # read it (e.g. no python3 in ITS env). Fail SAFE to needs, never to a false done.
+        rm -f "$cf" 2>/dev/null; echo needs > "$f"
+        printf 'falken gate: falken-verify could not classify the repo; surfacing as needs.\n' >&2
+        exit 0 ;;
+      3)                                                        # infra/env (watchdog, npm/op missing,
+                                                                # unresolved env, no lb test surface)
+        printf 'verify could not run (infra/env)\n' > "$rmark"
+        rm -f "$cf" 2>/dev/null; echo needs > "$f"
+        printf '%s\n' "$out" | tail -c 2048 >&2
+        printf '\n--- falken gate: verify could not run (infra/env, not a code failure); surfacing as needs. ---\n' >&2
+        exit 0 ;;
+      *)                                                        # RED (genuine code failure)
+        # Record the red marker BEFORE anything else, so a parallel idle-Notification never
+        # false-greens this working state (the Notification SEAL keys on exactly this marker).
+        printf 'verify red (attempt %s/%s)\n' "$n" "$CAP" > "$rmark"
+        if [ "$n" -ge "$CAP" ]; then
+          # Cap reached and STILL red (we DID verify this attempt): stop blocking, surface it.
+          rm -f "$cf" 2>/dev/null
+          echo needs > "$f"                                     # longest-waiting ✋, no more forced loops
+          tmux display-message "falken: $sess verify red after $n tries" 2>/dev/null
+          printf '%s\n' "$out" | tail -c 2048 >&2
+          printf '\n--- falken gate: verify still RED after %s attempts; surfacing as needs, no longer blocking. ---\n' "$n" >&2
+          exit 0
+        fi
+        echo working > "$f"                                     # LED lit, NOT done; agent keeps fixing
+        printf '%s\n' "$out" | tail -c 4096 >&2
+        printf '\n--- falken gate: verify RED (attempt %s/%s). Fix the above, then finish; the gate re-checks on stop. ---\n' "$n" "$CAP" >&2
+        exit 2 ;;
+    esac
     ;;
   SessionStart) echo idle > "$f" ;;
-  SessionEnd)   rm -f "$f" ;;
+  SessionEnd)
+    rm -f "$f" "$cf" "$rmark" "$vlock" 2>/dev/null ;;           # clear state + all gate scratch
 esac
 exit 0
