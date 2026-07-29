@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# tmux-jump-filter — switch the client to the NEXT session matching the switcher's ACTIVE filter
+# (~/.claude/falken-switcher-filter), cycling, in the same urgency order as the switcher:
+# ✋ needs (longest-waiting first) → ● working → ✓ done → ■ wrapped → ○ idle.
+# Bound to Opt-e (tap to cycle). If no filter is set, defaults to the "active" set
+# (needs+working+done) so it skips parked/idle noise. bash 3.2 safe.
+set -uo pipefail
+dir="$HOME/.claude/agent-state"
+active=$(cat "$HOME/.claude/falken-switcher-filter" 2>/dev/null | tr -d '\n')
+[ -n "$active" ] || active="needs working done"        # no filter set → cycle the live fleet
+
+case "$active" in
+  "needs working done") lbl="active" ;;
+  "needs done")         lbl="dormant" ;;
+  *)                    lbl="$active" ;;
+esac
+
+now=$(date +%s)
+sessions=()
+while IFS= read -r nm; do
+  [ -n "$nm" ] && sessions+=("$nm")
+done < <(
+  rank_order="needs working done wrapped idle"
+  for f in "$dir"/*; do
+    [ -e "$f" ] || continue
+    st=$(cat "$f" 2>/dev/null); [ -n "$st" ] || st=idle
+    mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+    [ "$st" = needs ] && [ $(( now - mt )) -gt 28800 ] && st=idle    # stale needs → idle
+    in_flt=0                                       # keep only states in the active filter
+    for w in $active; do
+      if [ "$w" = "$st" ]; then in_flt=1; break; fi
+    done
+    [ "$in_flt" = 1 ] || continue
+    rk=5; i=0                                      # urgency rank via for-loop (3.2-robust, no case)
+    for o in $rank_order; do
+      if [ "$o" = "$st" ]; then rk=$i; break; fi
+      i=$(( i + 1 ))
+    done
+    printf '%d\t%d\t%s\n' "$rk" "$mt" "$(basename "$f")"              # rank, then oldest-first
+  done | sort -t "$(printf '\t')" -k1,1n -k2,2n | cut -f3
+)
+
+n=${#sessions[@]}
+if [ "$n" -eq 0 ]; then tmux display-message "no $lbl sessions"; exit 0; fi
+cur=$(tmux display -p '#{session_name}' 2>/dev/null)
+target="${sessions[0]}"; pos=1; i=0
+for nm in "${sessions[@]}"; do
+  if [ "$nm" = "$cur" ]; then
+    j=$(( (i + 1) % n )); target="${sessions[$j]}"; pos=$(( j + 1 )); break
+  fi
+  i=$(( i + 1 ))
+done
+tmux switch-client -t "$target" 2>/dev/null
+tmux display-message "→ $target  ·  $lbl $pos/$n"

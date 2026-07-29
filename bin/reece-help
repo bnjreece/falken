@@ -26,7 +26,8 @@ ${L3}   ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀${x}
     ${d}N sess${x}          total tmux sessions
 
   ${b}KEYS${x} ${d}— Opt-letter (hold Option) = one-touch · C-a + Shift = fallback${x}
-    ${g}Opt-s${x} ${d}/ C-a Tab${x}  ${b}switcher${x} — pick any session, type to filter  ${d}(inside: ^W wrap · ^X kill)${x}
+    ${g}Opt-s${x} ${d}/ C-a Tab${x}  ${b}switcher${x} — pick any session, type to search  ${d}(inside: ^F all/active/dormant · f:… custom · ^W wrap · ^X kill)${x}
+    ${g}Opt-e${x} ${d}/ C-a E${x}    cycle your ${b}active filter${x} inline ${d}(all/active/dormant, set in the switcher · tap to cycle)${x}
     ${g}Opt-n${x} ${d}/ C-a N${x}    jump to the next session that ${r}needs you${x}  ${d}(tap again to cycle)${x}
     ${g}Opt-m${x} ${d}/ C-a D${x}    cycle ${d}✓ done${x} sessions to review yourself, oldest first ${d}(tap to cycle)${x}
     ${g}Opt-w${x}             ${b}wrap ⇄ unwrap${x} toggle for this session  ${d}(■ ⇄ ✓)${x}
