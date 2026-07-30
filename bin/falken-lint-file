@@ -8,7 +8,7 @@
 #
 # OPT-IN, same as the Stop gate: it only engages in a repo whose package.json carries a
 # `falken` key. Without that gate this would fire in EVERY eslint repo the moment the global
-# PostToolUse entry lands — including the deliberately-isolated ~/vendr-work checkouts.
+# PostToolUse entry lands — including deliberately-isolated / sensitive work checkouts.
 #
 # Reads the hook JSON payload on stdin. bash 3.2 safe. Idempotent / fail-safe: any tooling
 # problem is swallowed (exit 0) so a broken eslint never spams the model or wedges edits.
@@ -42,7 +42,7 @@ done
 [ -n "$root" ] || exit 0
 [ -f "$root/package.json" ] || exit 0
 
-# OPT-IN gate: no-op unless this repo carries a `falken` key (keeps us out of Vendr et al.).
+# OPT-IN gate: no-op unless this repo carries a `falken` key (keeps it out of isolated / non-participating repos).
 hasf=$(python3 -c 'import json,sys
 try:
     d=json.load(open(sys.argv[1]))
