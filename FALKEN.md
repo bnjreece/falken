@@ -15,6 +15,18 @@ A personal tmux + multi-agent control layer on the Mac mini. Scripts live in `~/
   - **Fix 2026-07-20:** Claude Code's `Notification` hook fires BOTH for permission requests AND for 60s-idle — the hook now reads the message and only flags `✋` on real permission asks, so background-workflow / bypass-permission sessions no longer false-alarm.
 - **AI delegation** — `codex-runner` skill (`~/.claude/skills/`): from any session, "get Sol's take" → OpenAI Codex on ChatGPT Pro. Full multi-agent Room: `~/bnjmn/the-room/SPEC.md`.
 
+## Verify gate (Build 1) — `✓ done` can't go green while the tree is red
+**Opt-in per repo** — add a `falken` key to the repo's `package.json`:
+```json
+"falken": { "tier": "prototype" }
+```
+Then on every Stop, `~/bin/claude-state-hook` runs the repo's verify chain via `~/bin/falken-verify`. **Red → the stop is BLOCKED** (exit 2), the failure is fed back as fix-context, and the session stays `● working` (not `✓ done`) until it passes — capped at **3** retries (below CC's built-in 8), after which it surfaces as `✋ needs`, never an infinite loop. Green → `✓ done`, as before. Un-gated repos (no `falken` key) behave exactly as they always did.
+- **Tiers** (blast-radius dial): `prototype` (default) = `npm run lint` only; `load-bearing` = `lint && typecheck && test`, `op://` env resolved (service-account only, bounded probe, never hangs). Garbled tier fails safe to load-bearing; `build` is deliberately excluded.
+- **Fail-safe:** any infra/tooling failure (npm/op missing, watchdog timeout, counter write/readback failure) surfaces as `needs` — never a false `done`, never a forced loop. A human question/permission prompt on screen always wins (blink, not block).
+- **Single writer:** the gate is the sole state authority on Stop; **feldd-cc defers to it** (won't write `done` while a `verify-red` marker or in-flight `verifying` lock exists), so the software board + SP-1 LEDs never show green on a red tree.
+- **Lint-on-edit (built, staged, NOT wired):** `~/bin/falken-lint-file` — a PostToolUse(Write|Edit) per-file eslint that surfaces findings before the Stop gate fires. Opt-in + fail-safe. Held pending an empirical confirm that PostToolUse exit-2 stderr reaches the model.
+- Scripts: `~/bin/{falken-verify, claude-state-hook, falken-lint-file}`. Gate scratch: `~/.claude/falken/{verify-tries,verify-red,verifying}/<session>`. Needs `~/.claude/settings.json` Stop `claude-state-hook` `timeout ≥ 360` (applied). First repo opted in: **falken itself** (prototype, bash-syntax-checks every `bin/` script).
+
 ## BACKLOG (parked ideas)
 
 ### 📱 Phone push on `✋` (parked 2026-07-20 — build when wanted)
@@ -47,7 +59,7 @@ When a session flips **idle/done → needs** (`✋`), push a notification to the
 **This repo IS Falken.** Scripts are canonical here in `bin/` and **symlinked into `~/bin`** (single source of truth — edit here, git-tracked). The config that wires them lives in `$HOME` (not tracked here):
 - **Scripts** — `bin/*` ⇄ `~/bin/*` (symlinks): `reece` splash · `reece-help` + `reece-help-view` cheatsheet (esc/q closes) · `tmux-switch` hot switcher (type-filter, `^X` kill, `◉ reece.is` label) · `tmux-agent-state` status-right · `tmux-reece-dot` reactive dot · `tmux-state-sync` seed+prune · `tmux-jump-needs`/`tmux-jump-done` rotation · `wrap` park · `claude-state-hook` the Claude→state bridge.
 - **tmux** — `~/.tmux.conf`: status-left/right call the scripts, `status-interval 1`, the `--- Falken · reece.is agent board ---` + hot-switcher keybind blocks (Opt-s/n/m/w/i + C-a fallbacks).
-- **Claude Code** — `~/.claude/settings.json`: `claude-state-hook` on 6 events (UserPromptSubmit / Notification / PermissionRequest / Stop / SessionStart / SessionEnd).
+- **Claude Code** — `~/.claude/settings.json`: `claude-state-hook` on 6 events (UserPromptSubmit / Notification / PermissionRequest / Stop / SessionStart / SessionEnd). The **Stop** entry carries `timeout: 360` (headroom for a load-bearing verify) — all other events keep `timeout: 5`. `falken-lint-file` (PostToolUse Write|Edit) is built but not yet wired.
 - **State** — `~/.claude/agent-state/<session>` (runtime files, not tracked; auto seeded/pruned by `tmux-state-sync`).
 
 Rehome on a new machine: clone this repo, symlink `bin/*`→`~/bin`, paste the Falken keybind block + the settings.json hook.
