@@ -1,0 +1,11 @@
+{
+  "name": "falken",
+  "private": true,
+  "description": "tmux + multi-agent Claude Code cockpit. Scripts in bin/ are symlinked into ~/bin.",
+  "falken": {
+    "tier": "prototype"
+  },
+  "scripts": {
+    "lint": "for f in bin/*; do if head -1 \"$f\" | grep -q bash; then bash -n \"$f\" || exit 1; fi; done"
+  }
+}
