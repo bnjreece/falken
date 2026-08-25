@@ -23,7 +23,93 @@ CDIR="$HOME/.claude/falken"
 TRIES_DIR="$CDIR/verify-tries"     # per-session retry counter
 RED_DIR="$CDIR/verify-red"         # per-sess "verify is red" reason marker
 VERIFYING_DIR="$CDIR/verifying"    # per-sess in-flight lock (guards parallel Notification demote)
+TOOL_DIR="$CDIR/tool-inflight"     # per-sess dir of markers, one per tool call currently RUNNING
+BGWAIT_DIR="$CDIR/bg-wait"         # per-sess seal: a Stop SAW background work; holds until a clean Stop
+TOOL_STALE_MIN=360                 # a marker older than this (minutes) is ignored: orphaned, not open
 CAP=3                              # our OWN bound (<8 so it fires before any rumored built-in cap)
+# rm -rf below takes this path, so the session name is sanitized to a fixed alphabet first: a
+# tmux session may contain a slash, which would otherwise let "$TOOL_DIR/$sess" escape into a
+# parent (a session literally named "/" would resolve td to TOOL_DIR itself and wipe every
+# session's markers). A cksum suffix disambiguates names that sanitize identically (a/b vs a_b):
+# without it, tool_clear from one such session would rm -rf the OTHER session's live markers --
+# under-reporting depth, the unsafe direction.
+tdkey="$(printf '%s' "$sess" | tr -c 'A-Za-z0-9_.-' '_').$(printf '%s' "$sess" | cksum | cut -d' ' -f1)"
+td="$TOOL_DIR/$tdkey"
+bmark="$BGWAIT_DIR/$tdkey"
+
+# --- in-flight tool depth -------------------------------------------------------------
+# WHY: an idle Notification only means "no hook events for ~60s", which is equally true when the
+# agent was INTERRUPTED (state frozen at 'working') and when it is merely BLOCKED on a slow tool --
+# a long build, a test run, a sleep. PreToolUse fires once when the tool starts and Stop does not
+# fire until the whole turn ends, so from this script's side those two cases are indistinguishable,
+# and the Notification branch below used to resolve BOTH to `done`: a false green while a shell
+# command was still running. Depth makes "a tool is open" a fact to consult instead of a guess.
+# SELF-HEAL: every turn boundary (UserPromptSubmit / Stop / SessionStart / SessionEnd) clears the
+# file, and a file older than TOOL_STALE reads as 0, so a dropped PostToolUse cannot pin a session
+# at 'working' forever. Both fallbacks degrade to the OLD behaviour, never to something worse.
+# ONE MARKER FILE PER OPEN TOOL, never a counter. Hooks for parallel tool calls run as separate
+# concurrent processes, so a counter would be an unlocked read-modify-write: two PreToolUse hooks
+# both read 0, both write 1, and the first PostToolUse then writes 0 while the second tool is still
+# running -- reproducing the exact false-green this change exists to kill. Creating a uniquely-named
+# file and deleting an arbitrary one are both atomic, so no lock is needed. Every remaining race
+# resolves toward "one marker too many", i.e. the LED stays `working` slightly too long, which is
+# the safe direction; the old failure was a false `done`.
+# If the marker cannot be written (unwritable scratch dir, full disk), fall back to a sentinel in
+# the state dir that tool_depth also honours. Silently returning 0 here would mean "no tool open"
+# during a live tool -> false `done`. The sentinel is cleared by tool_clear like any other marker.
+tool_open() {
+  if mkdir -p "$td" 2>/dev/null && : > "$td/$(date +%s)-$$-${RANDOM}" 2>/dev/null; then return 0; fi
+  : > "$dir/.$tdkey.tool" 2>/dev/null
+  return 0
+}
+tool_close() { local m; m=$(ls -1 "$td" 2>/dev/null | head -1); [ -n "$m" ] && rm -f "$td/$m" 2>/dev/null; return 0; }
+tool_clear() { rm -rf "$td" 2>/dev/null; rm -f "$dir/.$tdkey.tool" 2>/dev/null; return 0; }
+# Depth counts only markers newer than TOOL_STALE_MIN. The window is deliberately HOURS, not
+# minutes: a tool that legitimately runs long (a subagent, a workflow, a background task) must never
+# age out into a false `done`, and an orphaned marker costs nothing because every turn boundary
+# clears the whole directory anyway. If find itself fails (unreadable dir, no find), report 1 ->
+# treat the session as still working. Every failure mode here resolves to `working`, never `done`.
+tool_depth() {
+  [ -f "$dir/.$tdkey.tool" ] && { echo 1; return; }   # marker-write fallback: assume a tool is open
+  [ -d "$td" ] || { echo 0; return; }
+  local out n
+  # find's EXIT STATUS is captured, not just its output: a failing find prints nothing, and piping
+  # straight into `wc -l` would launder that into a perfectly valid "0" -- i.e. fail toward a false
+  # `done`, the exact bug class this whole change exists to remove. Any failure reports 1 instead.
+  out=$(find "$td" -type f -mmin -"$TOOL_STALE_MIN" 2>/dev/null) || { echo 1; return; }
+  n=$(printf '%s' "$out" | grep -c . 2>/dev/null)
+  case "$n" in ''|*[!0-9]*) echo 1 ;; *) echo "$n" ;; esac
+}
+
+# --- background-work badge --------------------------------------------------------------
+# Claude Code renders status-bar badges ("· 1 shell", "· 2 background tasks", "· 1 MCP task
+# still running", "· 1 workflow") ONLY while such background work is running; they vanish the
+# moment it completes (verified: absent on idle panes). This is the clean signal the
+# 2026-07-21 investigation (FALKEN.md backlog) said did not exist -- it ships with newer CC.
+# The leading middle-dot anchors the match to badge syntax, so ordinary prose in a captured
+# line ("I started 2 background tasks") cannot match. Consulted by BOTH turn-end writers
+# (Stop's STEP 1.5 and the idle-Notification demote) so the two parallel writers cannot
+# disagree into a false green. Returns: 0 badge present · 1 pane read clean, no badge ·
+# 2 pane unreadable (caller picks the safe direction).
+bg_badge() {
+  local pane
+  pane=$(tmux capture-pane -t "$TMUX_PANE" -p 2>/dev/null) || return 2
+  [ -n "$pane" ] || return 2
+  # Structural line rules, not just a substring: (1) the two-sided delimited badge form is
+  # accepted ONLY on the last non-empty line — that line is always the TUI bottom bar (the
+  # mode/badge chrome), never assistant prose, so "Summary · 2 background tasks · completed"
+  # in a message body cannot match; (2) elsewhere in the last 3 lines, only the spinner form,
+  # which ends in the literal "still running" AND carries the middle-dot count prefix — prose
+  # would have to reproduce "· N <badge> still running" verbatim at end-of-line, at which
+  # point a brief `working` over-report is the safe direction anyway.
+  local last
+  last=$(printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -1)
+  printf '%s\n' "$last" \
+    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?)( still running)?( ·|$)' && return 0
+  printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -3 \
+    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?) still running$' && return 0
+  return 1
+}
 
 # All gate scratch is keyed by the tmux SESSION NAME (one pane = one agent = one session), the
 # same key as the state file. Keying the counter by session_id instead would let wrap/human-gate
@@ -46,8 +132,12 @@ fi
 case "$ev" in
   UserPromptSubmit)                                             # you gave it a task
     echo working > "$f"
-    rm -f "$cf" "$rmark" 2>/dev/null ;;                         # fresh human turn -> reset the gate counter
-  PreToolUse)        echo working > "$f" ;;                     # actively using tools (clears stale needs after you answer)
+    rm -f "$cf" "$rmark" "$bmark" 2>/dev/null; tool_clear ;;    # fresh human turn -> reset gate counter + tool markers + bg seal
+  PreToolUse)        echo working > "$f"; tool_open ;;        # actively using tools (clears stale needs after you answer)
+  PostToolUse|PostToolUseFailure)
+    # A tool finished. Close it and leave state alone: the turn is still running, and Stop is the
+    # branch that decides `done`. Writing state here would race the verify gate.
+    tool_close ;;
   PermissionRequest) echo needs   > "$f" ;;                     # explicit approval gate
   Notification)
     # Claude Code fires Notification for (a) a tool-permission request, or (b) the prompt sitting
@@ -65,7 +155,16 @@ case "$ev" in
         # would demote it to 'done' on a still-red tree. If a verify-red marker or an in-flight
         # verify lock exists for this session, demote to 'needs' instead -> never a false green.
         if [ "$(cat "$f" 2>/dev/null)" = working ]; then
-          if [ -f "$rmark" ] || [ -f "$vlock" ]; then echo needs > "$f"; else echo done > "$f"; fi
+          if [ "$(tool_depth)" -gt 0 ]; then
+            :                                                     # tool still open -> idle means BLOCKED, not stopped
+          elif [ -f "$bmark" ] || bg_badge; then
+            # bg seal OR live badge -> BLOCKED on background work, not stopped. The persistent
+            # seal (written by the Stop that saw the badge) closes the TOCTOU where the work
+            # completes between that Stop's pane snapshot and this one: only a later CLEAN Stop
+            # (which runs the verify gate) or a fresh human prompt releases it.
+            :
+          elif [ -f "$rmark" ] || [ -f "$vlock" ]; then echo needs > "$f"
+          else echo done > "$f"; fi
         fi
         ;;
     esac
@@ -81,6 +180,39 @@ case "$ev" in
       rm -f "$cf" "$rmark" 2>/dev/null
       exit 0
     fi
+
+    # ---- STEP 1.5: BACKGROUND WORK OUTLIVES THE TURN (2026-08-25) ----
+    # The old premise here ("turn over -> nothing can still be open") predates async background
+    # work: a turn now ends while a run_in_background shell, an async MCP task (e.g. a Sol
+    # review), or a background workflow is still in flight, and CC re-wakes the session when it
+    # completes. Writing `done` at that stop was the board's recurring false-green.
+    # bg_badge is the primary signal. Badge present -> working. Badge legibly ABSENT on a
+    # readable pane -> any remaining depth markers are stale (their PostToolUse was dropped) ->
+    # clear them and fall through to the verify gate, preserving the self-heal guarantee. Pane
+    # unreadable -> fall back to depth markers, failing toward `working`, never a false `done`.
+    # The idle-Notification demote makes the SAME bg_badge check, so the two parallel writers
+    # cannot disagree into a false green. The verify gate is DEFERRED to the final stop (no
+    # pending work), so it checks the finished tree; the re-wake's Stop re-enters this branch.
+    bg_badge; bgrc=$?
+    if [ "$bgrc" = "0" ] || { [ "$bgrc" = "2" ] && [ "$(tool_depth)" -gt 0 ]; }; then
+      # Persistent seal FIRST: the parallel Notification writer honors it even if the badge
+      # vanishes right after this snapshot. If the seal cannot be written AND read back, fall
+      # back to tool_open's sentinel chain — tool_depth honors it, and Notification checks
+      # depth before the seal, so the protection holds without a silent degrade.
+      if ! { mkdir -p "$BGWAIT_DIR" 2>/dev/null && : > "$bmark" 2>/dev/null && [ -f "$bmark" ]; }; then
+        tool_open
+      fi
+      echo working > "$f"                                        # waiting on background work, not done
+      exit 0
+    fi
+    # Clean pane: do NOT release the seal or the depth markers yet. Both stay until THIS
+    # process exits — i.e. after whichever terminal write below (un-gated done, GREEN done,
+    # needs, RED working) has landed — so the parallel Notification writer can never demote in
+    # any gap between this re-evaluation and the gate's verdict, INCLUDING the corner where the
+    # seal write failed and tool_open's depth sentinel is carrying the protection instead.
+    # STEP 4's vlock trap re-arms this same cleanup. Self-heal is preserved: everything still
+    # clears by process exit, and UserPromptSubmit/SessionEnd clear it independently.
+    trap 'rm -f "$bmark" 2>/dev/null; tool_clear' EXIT
 
     # ---- STEP 2: OPT-IN (repo-root walk + falken key presence) ----
     # Walk UP from the payload cwd to the first dir containing .git (the repo boundary). The walk
@@ -164,8 +296,10 @@ print("1" if d.get("stop_hook_active") is True else "0")' 2>/dev/null)
       exit 0
     fi
     : > "$vlock" 2>/dev/null
-    trap 'rm -f "$vlock" 2>/dev/null' EXIT       # vlock lives until THIS process exits (after the
-                                                 # state write below), sealing the false-green window.
+    trap 'rm -f "$vlock" "$bmark" 2>/dev/null; tool_clear' EXIT   # vlock, bg seal, and depth markers all
+                                                                  # live until THIS process exits (after the
+                                                                  # state write below), sealing the
+                                                                  # false-green window end to end.
     out=$("$FV" "$root" 2>&1); rc=$?
 
     # Respect an explicit HUMAN signal set DURING the ~100s verify window: if the user parked the
@@ -213,8 +347,8 @@ print("1" if d.get("stop_hook_active") is True else "0")' 2>/dev/null)
         exit 2 ;;
     esac
     ;;
-  SessionStart) echo idle > "$f" ;;
+  SessionStart) echo idle > "$f"; tool_clear ;;
   SessionEnd)
-    rm -f "$f" "$cf" "$rmark" "$vlock" 2>/dev/null ;;           # clear state + all gate scratch
+    rm -f "$f" "$cf" "$rmark" "$vlock" "$bmark" 2>/dev/null; tool_clear ;; # clear state + all gate scratch
 esac
 exit 0

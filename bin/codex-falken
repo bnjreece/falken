@@ -1,0 +1,16 @@
+#!/bin/bash
+# codex-falken — run Codex with Falken lifecycle hooks scoped to this process.
+# Keeping the hook layer on the command line avoids changing ordinary Codex sessions
+# and makes rollback as simple as launching `codex` directly or removing this wrapper.
+
+hook_command="$HOME/bin/codex-state-hook"
+
+exec codex \
+  -c "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"$hook_command\",timeout=5}]}]" \
+  -c "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"$hook_command\",timeout=5}]}]" \
+  -c "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$hook_command\",timeout=5}]}]" \
+  -c "hooks.PostToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$hook_command\",timeout=5}]}]" \
+  -c "hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$hook_command\",timeout=5}]}]" \
+  -c "hooks.Stop=[{hooks=[{type=\"command\",command=\"$hook_command\",timeout=360,statusMessage=\"Running Falken verification\"}]}]" \
+  -c "hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"$hook_command\",timeout=3}]}]" \
+  "$@"

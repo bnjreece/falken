@@ -1,0 +1,162 @@
+#!/bin/bash
+# codex-state-hook — Codex lifecycle adapter for the Falken tmux board.
+# Claude keeps its existing adapter untouched. Both publish the same state words.
+
+[ -n "$TMUX_PANE" ] || exit 0
+payload=$(cat)
+command -v python3 >/dev/null 2>&1 || exit 0
+
+field() {
+  printf '%s' "$payload" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print(""); sys.exit(0)
+v=d.get(sys.argv[1], "")
+if isinstance(v, bool): print("1" if v else "0")
+elif isinstance(v, (str, int, float)): print(v)
+else: print("")' "$1" 2>/dev/null
+}
+
+ev=$(field hook_event_name)
+sess=$(tmux display -pt "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
+[ -n "$ev" ] && [ -n "$sess" ] || exit 0
+
+# Keep the existing board path so tmux and feldd-cc require no migration. Codex
+# scratch is separate, preventing its verification retries from touching Claude's.
+state_dir="$HOME/.claude/agent-state"
+scratch="$HOME/.falken/codex"
+tries_dir="$scratch/verify-tries"
+red_dir="$scratch/verify-red"
+verifying_dir="$scratch/verifying"
+tool_dir="$scratch/tool-inflight"
+mkdir -p "$state_dir" "$tries_dir" "$red_dir" "$verifying_dir" "$tool_dir" 2>/dev/null
+
+# The state file stays keyed by the RAW tmux session name: that is the board contract the
+# tmux-* scripts and the Claude adapter share (same pre-existing constraint there). All
+# private scratch uses one sanitized, collision-resistant key: tr maps unsafe chars (so a
+# name with "/" cannot escape the scratch dirs) and the cksum suffix disambiguates names
+# that sanitize identically (a/b vs a_b), so one session's cleanup can never delete
+# another's live scratch.
+state_file="$state_dir/$sess"
+safe_sess="$(printf '%s' "$sess" | tr -c 'A-Za-z0-9_.-' '_').$(printf '%s' "$sess" | cksum | cut -d' ' -f1)"
+tries_file="$tries_dir/$safe_sess"
+red_file="$red_dir/$safe_sess"
+verifying_file="$verifying_dir/$safe_sess"
+open_tools="$tool_dir/$safe_sess"
+cap=3
+
+tool_open() {
+  mkdir -p "$open_tools" 2>/dev/null || return 0
+  : > "$open_tools/$(date +%s)-$$-${RANDOM}" 2>/dev/null || true
+}
+tool_close() {
+  marker=$(ls -1 "$open_tools" 2>/dev/null | head -1)
+  [ -n "$marker" ] && rm -f "$open_tools/$marker" 2>/dev/null
+  return 0
+}
+tool_clear() {
+  # safe_sess is restricted above, so this cannot resolve to a parent directory.
+  rm -rf "$open_tools" 2>/dev/null
+}
+
+# wrapped belongs to the human. Only a fresh prompt or session end may clear it.
+if [ "$(cat "$state_file" 2>/dev/null)" = wrapped ]; then
+  case "$ev" in UserPromptSubmit|SessionEnd) : ;; *) exit 0 ;; esac
+fi
+
+case "$ev" in
+  SessionStart)
+    echo idle > "$state_file"; tool_clear ;;
+  UserPromptSubmit)
+    echo working > "$state_file"
+    rm -f "$tries_file" "$red_file" 2>/dev/null; tool_clear ;;
+  PreToolUse)
+    tool_name=$(field tool_name)
+    # Mark Codex's interactive-question tool as needs before it waits.
+    case "$tool_name" in
+      request_user_input|AskUserQuestion) echo needs > "$state_file" ;;
+      *) echo working > "$state_file"; tool_open ;;
+    esac ;;
+  PostToolUse)
+    tool_name=$(field tool_name)
+    case "$tool_name" in
+      request_user_input|AskUserQuestion) echo working > "$state_file" ;;
+      *) tool_close ;;
+    esac ;;
+  PermissionRequest)
+    echo needs > "$state_file" ;;
+  Stop)
+    tool_clear
+    cwd=$(field cwd)
+    root=""; walk="$cwd"
+    while [ -n "$walk" ] && [ "$walk" != / ]; do
+      if [ -e "$walk/.git" ]; then root="$walk"; break; fi
+      walk=$(dirname "$walk")
+    done
+
+    gated=0
+    if [ -n "$root" ] && [ -f "$root/package.json" ]; then
+      gated=$(python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: print("0"); sys.exit(0)
+print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json" 2>/dev/null)
+    fi
+    if [ "$gated" != 1 ]; then echo done > "$state_file"; exit 0; fi
+
+    stop_active=$(field stop_hook_active)
+    n=$(cat "$tries_file" 2>/dev/null)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    n=$((n + 1))
+    if ! printf '%s\n' "$n" > "$tries_file" 2>/dev/null \
+       || [ "$(cat "$tries_file" 2>/dev/null)" != "$n" ]; then
+      echo needs > "$state_file"
+      printf 'falken gate: could not safely record retry state; surfacing as needs.\n' >&2
+      exit 0
+    fi
+    if [ "$stop_active" = 1 ] && [ "$n" -le 1 ]; then
+      rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+      printf 'falken gate: continuation state was lost; surfacing as needs.\n' >&2
+      exit 0
+    fi
+
+    verifier=$(command -v falken-verify 2>/dev/null)
+    [ -x "$verifier" ] || verifier="$HOME/bin/falken-verify"
+    [ -x "$verifier" ] || verifier="$HOME/bnjmn/falken/bin/falken-verify"
+    if [ ! -x "$verifier" ]; then
+      rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+      printf 'falken gate: falken-verify is missing; surfacing as needs.\n' >&2
+      exit 0
+    fi
+
+    : > "$verifying_file" 2>/dev/null
+    trap 'rm -f "$verifying_file" 2>/dev/null' EXIT
+    output=$("$verifier" "$root" 2>&1); rc=$?
+    current=$(cat "$state_file" 2>/dev/null)
+    if [ "$current" = wrapped ] || [ "$current" = needs ]; then exit 0; fi
+
+    case "$rc" in
+      0)
+        rm -f "$tries_file" "$red_file" 2>/dev/null
+        echo done > "$state_file"; exit 0 ;;
+      2|3)
+        rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+        printf '%s\n' "$output" | tail -c 2048 >&2
+        printf '\n--- falken gate: verification could not run honestly; surfacing as needs. ---\n' >&2
+        exit 0 ;;
+      *)
+        printf 'verify red (attempt %s/%s)\n' "$n" "$cap" > "$red_file"
+        if [ "$n" -ge "$cap" ]; then
+          rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+          printf '%s\n' "$output" | tail -c 2048 >&2
+          printf '\n--- falken gate: verify still RED after %s attempts; surfacing as needs. ---\n' "$n" >&2
+          exit 0
+        fi
+        echo working > "$state_file"
+        printf '%s\n' "$output" | tail -c 4096 >&2
+        printf '\n--- falken gate: verify RED (attempt %s/%s). Fix it, then finish; the gate re-checks on stop. ---\n' "$n" "$cap" >&2
+        exit 2 ;;
+    esac ;;
+  SessionEnd)
+    rm -f "$state_file" "$tries_file" "$red_file" "$verifying_file" 2>/dev/null
+    tool_clear ;;
+esac
+exit 0

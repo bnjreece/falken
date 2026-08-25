@@ -1,0 +1,32 @@
+#!/bin/bash
+# xsd — start or attach to a Falken-managed Codex tmux session in bypass mode.
+# Usage: xsd [session-name] [project-dir]
+
+session_name="${1:-codex-danger}"
+project_dir="${2:-$HOME}"
+
+if ! command -v tmux >/dev/null 2>&1; then
+  printf 'tmux not found. Install it with: brew install tmux\n' >&2; exit 1
+fi
+if ! command -v codex-falken >/dev/null 2>&1; then
+  printf 'codex-falken not found on PATH. Re-link Falken bin scripts into ~/bin.\n' >&2; exit 1
+fi
+if [ ! -d "$project_dir" ]; then
+  printf 'project directory does not exist: %s\n' "$project_dir" >&2; exit 1
+fi
+
+if tmux has-session -t "$session_name" 2>/dev/null; then
+  printf 'Attaching to existing session: %s\n' "$session_name"
+  exec tmux attach -t "$session_name"
+fi
+
+printf 'Creating new DANGEROUS Codex session: %s\n' "$session_name"
+printf 'Project directory: %s\n' "$project_dir"
+tmux new-session -d -s "$session_name" -c "$project_dir"
+tmux rename-window -t "$session_name:1" codex-danger
+# The d suffix mirrors csd: no approval prompts and no Codex sandbox.
+# codex-falken injects only Falken's tracked hooks. xsd separately mirrors csd's
+# dangerous execution mode: no approval prompts and no Codex sandbox.
+tmux send-keys -t "$session_name" 'codex-falken --dangerously-bypass-approvals-and-sandbox' Enter
+command -v falken >/dev/null 2>&1 && falken --quick
+exec tmux attach -t "$session_name"
