@@ -58,7 +58,20 @@ case "${1:-}" in
     s="${2:-}"; [ -n "$s" ] || exit 0
     printf '\n  kill session "%s"?  [y/N] ' "$s"
     read -rsn1 a; echo
-    case "$a" in y|Y) tmux kill-session -t "$s" 2>/dev/null ;; esac
+    # Every outcome is announced: a silent no-op here cost a "killed" session that was
+    # never killed (any key but y declines, and the error stream was thrown away).
+    case "$a" in
+      y|Y)
+        err=$(tmux kill-session -t "=$s" 2>&1); rc=$?   # =exact match: never prefix-kill a sibling (livekit vs livekit-dev)
+        if [ "$rc" -eq 0 ]; then
+          printf '  ✗ killed "%s"\n' "$s"; sleep 0.6
+        elif tmux has-session -t "=$s" 2>/dev/null; then
+          printf '  ⚠ FAILED to kill "%s"%s\n' "$s" "${err:+ — ${err}}"; sleep 1.8
+        else
+          printf '  ⚠ "%s" was not running — %s\n' "$s" "${err:-unknown error}"; sleep 1.2
+        fi ;;
+      *) printf '  not killed (press y to confirm)\n'; sleep 0.9 ;;
+    esac
     exit 0 ;;
   --wrap-toggle)
     s="${2:-}"; [ -n "$s" ] || exit 0
