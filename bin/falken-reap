@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# falken-reap — retire piled-up MCP servers in long-running fleet sessions.
+#
+# THE PROBLEM
+# Every agent invocation spawns its MCP server set over stdio, and a stdio
+# server lives exactly as long as its client holds the pipe. Nothing times out,
+# because the protocol has no idle concept. Clients that keep a session open for
+# days therefore accumulate sets: one Codex process observed here was 16 days
+# old and held 31 copies of one MCP server, ~43 MB each, doing nothing.
+#
+# WHY NOT "KILL THE IDLE ONES"
+# The obvious heuristic — reap servers with no CPU time — was measured and does
+# NOT work. On this machine a LIVE Codex session's servers showed 0.01-0.53s of
+# cumulative CPU while 10-day-old abandoned ones showed 0.7s. These processes
+# are near-idle even when connected, so CPU cannot tell live from abandoned.
+#
+# WHAT DOES WORK
+# Cardinality. Nobody needs 31 concurrent copies of one MCP server in one
+# session, whatever any single copy is doing. So this bounds the count per
+# (session, server) and retires the OLDEST beyond it, newest-wins — the newest
+# set belongs to the most recent invocation and is the one still wired up.
+#
+# It never constrains what an agent may run. It only cleans up after it.
+#
+# SAFETY (all four must pass before anything is signalled)
+#   1. the session's Falken state is not `working`
+#   2. the process is older than --grace (a fresh spawn is never raced)
+#   3. at least --keep newer siblings of the same kind exist in that session
+#   4. --apply was passed; the default is a dry run
+# Retirement is SIGTERM, never SIGKILL: a stdio server that gets TERM closes its
+# pipe and the client re-spawns on next use. SIGKILL can strand a half-written
+# frame on the client side.
+#
+# usage:
+#   falken-reap                 # report only (safe, default)
+#   falken-reap --apply         # actually retire
+#   falken-reap --keep 2        # allow 2 per (session, server)  [default 3]
+#   falken-reap --grace 60      # only touch processes older than 60m [default 30]
+#   falken-reap --json          # machine-readable, for the board
+set -uo pipefail
+
+keep=3; grace=30; apply=0; json=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply) apply=1 ;;
+    --keep)  keep="${2:?--keep needs a number}"; shift ;;
+    --grace) grace="${2:?--grace needs minutes}"; shift ;;
+    --json)  json=1 ;;
+    -h|--help)
+      sed -n '/^# usage:/,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; $d'
+      exit 0 ;;
+    *) printf 'falken-reap: unknown arg %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+exec python3 - "$keep" "$grace" "$apply" "$json" <<'PY'
+import os, sys, json as J, signal, subprocess, collections
+
+KEEP, GRACE_MIN, APPLY, JSON = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "1", sys.argv[4] == "1"
+STATE_DIR = os.path.expanduser("~/.claude/agent-state")
+
+# Server kinds worth bounding. Matched on the command line because the process
+# name alone is useless here - almost everything reports as `node`.
+KINDS = (
+    ("codex mcp-server",  "codex"),
+    ("node_repl",         "node_repl"),
+)
+# Machine-specific servers stay out of this public repo: list them in
+# ~/.falken/reap-kinds, one per line as "<command-line needle> <label>" (the
+# label is the last word; # starts a comment). A missing file is fine. They are
+# matched before the generic kinds above.
+try:
+    with open(os.path.expanduser("~/.falken/reap-kinds"), encoding="utf-8", errors="replace") as fh:
+        _local = [l.strip().rsplit(None, 1) for l in fh if l.strip() and not l.lstrip().startswith("#")]
+    KINDS = tuple((n, k) for n, k in (p for p in _local if len(p) == 2)) + KINDS
+except OSError:
+    pass
+
+def kind_of(cmd):
+    for needle, label in KINDS:
+        if needle in cmd:
+            return label
+    return None
+
+def etime_seconds(t):
+    """ps ELAPSED -> seconds. Formats: MM:SS, HH:MM:SS, D-HH:MM:SS."""
+    days = 0
+    if "-" in t:
+        d, t = t.split("-", 1)
+        days = int(d)
+    bits = [int(x) for x in t.split(":")]
+    while len(bits) < 3:
+        bits.insert(0, 0)
+    h, m, s = bits
+    return days * 86400 + h * 3600 + m * 60 + s
+
+# --- real footprint, not RSS ---
+# These servers sit idle for days, so the OS pages them out and `ps rss` reports
+# a fraction of what they actually hold: 248 leaked servers measured 118 MB
+# resident but ~10 GB of footprint, which is precisely why swap was pinned.
+# Reporting RSS would make the win look 80x smaller than it is. One `top` call
+# is the cheapest source of phys_footprint; if it fails we fall back to RSS and
+# say so rather than quietly reporting the wrong number.
+FOOT, FOOT_OK = {}, False
+try:
+    top = subprocess.run(["top", "-l", "1", "-n", "600", "-stats", "pid,mem"],
+                         capture_output=True, text=True, timeout=25).stdout
+    for line in top.splitlines():
+        f = line.split()
+        if len(f) != 2 or not f[0].isdigit():
+            continue
+        tok = f[1].rstrip("+-")
+        unit, val = tok[-1], tok[:-1]
+        try:
+            v = float(val)
+        except ValueError:
+            continue
+        FOOT[int(f[0])] = v / 1024 if unit == "K" else v * 1024 if unit == "G" else v
+    FOOT_OK = bool(FOOT)
+except Exception:
+    FOOT_OK = False
+
+def mb_of(pid, rss_kb):
+    return FOOT.get(pid, rss_kb / 1024)
+
+# --- one ps pass; building the tree by hand beats N pgrep forks ---
+ps = subprocess.run(
+    ["ps", "-Ao", "pid=,ppid=,etime=,rss=,command="],
+    capture_output=True, text=True).stdout
+kids = collections.defaultdict(list)
+proc = {}
+for line in ps.splitlines():
+    f = line.strip().split(None, 4)
+    if len(f) < 5:
+        continue
+    try:
+        pid, ppid, rss = int(f[0]), int(f[1]), int(f[3])
+    except ValueError:
+        continue
+    kids[ppid].append(pid)
+    proc[pid] = {"ppid": ppid, "age": etime_seconds(f[2]), "rss": rss, "cmd": f[4]}
+
+def descendants(root):
+    seen, stack = set(), [root]
+    while stack:
+        p = stack.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        stack.extend(kids.get(p, []))
+    return seen
+
+# --- map every process to the tmux session that owns it ---
+panes = subprocess.run(
+    ["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
+    capture_output=True, text=True).stdout.split()
+owner = {}
+for line in panes:
+    if "|" not in line:
+        continue
+    sess, pane_pid = line.split("|", 1)
+    try:
+        for p in descendants(int(pane_pid)):
+            owner[p] = sess
+    except ValueError:
+        continue
+
+def state_of(sess):
+    try:
+        return open(os.path.join(STATE_DIR, sess)).read().strip()
+    except OSError:
+        return "unknown"
+
+# --- group: (session, kind) -> [processes], newest first ---
+groups = collections.defaultdict(list)
+for pid, p in proc.items():
+    k = kind_of(p["cmd"])
+    if not k:
+        continue
+    sess = owner.get(pid)
+    if not sess:
+        continue          # not in the fleet; not ours to manage
+    groups[(sess, k)].append((p["age"], pid, p["rss"]))
+
+grace_s = GRACE_MIN * 60
+plan, skipped = [], []
+for (sess, kind), rows in sorted(groups.items()):
+    rows.sort()                       # youngest first: age ascending
+    st = state_of(sess)
+    surplus = rows[KEEP:]             # everything past the newest KEEP
+    if not surplus:
+        continue
+    if st == "working":
+        # Mid-turn. A retire here could pull a server out from under a live
+        # call, and the win is only memory - it can wait for the next sweep.
+        skipped.append({"session": sess, "kind": kind, "state": st,
+                        "surplus": len(surplus),
+                        "mb": round(sum(mb_of(r[1], r[2]) for r in surplus))})
+        continue
+    for age, pid, rss in surplus:
+        if age < grace_s:
+            continue
+        plan.append({"session": sess, "kind": kind, "pid": pid,
+                     "age_h": round(age / 3600, 1), "mb": round(mb_of(pid, rss), 1)})
+
+freed = round(sum(p["mb"] for p in plan))
+retired, failed = [], []
+if APPLY:
+    for p in plan:
+        try:
+            os.kill(p["pid"], signal.SIGTERM)
+            retired.append(p["pid"])
+        except ProcessLookupError:
+            retired.append(p["pid"])      # already gone; the outcome we wanted
+        except PermissionError as e:
+            failed.append({"pid": p["pid"], "err": str(e)})
+
+if JSON:
+    print(J.dumps({"keep": KEEP, "grace_min": GRACE_MIN, "applied": APPLY,
+                   "candidates": plan, "skipped_working": skipped,
+                   "reclaimable_mb": freed, "footprint_source": "top" if FOOT_OK else "rss", "retired": retired,
+                   "failed": failed}, indent=2))
+    sys.exit(0)
+
+if not plan and not skipped:
+    print(f"falken-reap: nothing to retire (keep={KEEP}/kind/session, grace={GRACE_MIN}m)")
+    sys.exit(0)
+
+by_sess = collections.defaultdict(list)
+for p in plan:
+    by_sess[p["session"]].append(p)
+verb = "RETIRED" if APPLY else "would retire"
+for sess in sorted(by_sess):
+    rows = by_sess[sess]
+    mb = round(sum(r["mb"] for r in rows))
+    print(f"{sess:<12} {verb} {len(rows):>3} server(s)  {mb:>6} MB  [{state_of(sess)}]")
+    counts = collections.Counter(r["kind"] for r in rows)
+    oldest = max(r["age_h"] for r in rows)
+    print("             " + ", ".join(f"{k} x{v}" for k, v in counts.most_common())
+          + f"   (oldest {oldest}h)")
+for s in skipped:
+    print(f"{s['session']:<12} SKIPPED  {s['surplus']:>3} {s['kind']} "
+          f"({s['mb']} MB) - session is {s['state']}")
+note = "" if FOOT_OK else "  [RSS fallback - understates paged-out servers]"
+print(f"{'':<12} {'TOTAL':<7} {len(plan):>3} server(s)  {freed:>6} MB{note}"
+      + ("" if APPLY else "   (dry run - pass --apply)"))
+if failed:
+    print(f"  {len(failed)} could not be signalled: {failed}")
+PY
