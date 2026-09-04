@@ -171,8 +171,14 @@ def measure(pid, rss_kb):
     return rss_kb / 1024, "rss"
 
 # --- one ps pass; building the tree by hand beats N pgrep forks ---
-ps_r = subprocess.run(["ps", "-Ao", "pid=,ppid=,etime=,rss=,command="],
-                      capture_output=True, text=True)
+# subprocess.run raises OSError before there is a return code to check when
+# the binary is missing or execution is denied. Route that through fail() too,
+# or it is a traceback and exit 1 that breaks the JSON contract.
+try:
+    ps_r = subprocess.run(["ps", "-Ao", "pid=,ppid=,etime=,rss=,command="],
+                          capture_output=True, text=True)
+except OSError as e:
+    fail(f"ps could not be launched: {e}")
 if ps_r.returncode != 0 or not ps_r.stdout.strip():
     fail(f"ps failed (rc={ps_r.returncode}): {ps_r.stderr.strip() or 'no output'}")
 kids = collections.defaultdict(list)
@@ -202,8 +208,11 @@ def descendants(root):
 # splitlines(), NOT split(): a session named "work fleet" splits on the space
 # and gets attributed to "fleet", which then reads the WRONG state file.
 # rsplit on the delimiter for the same reason - the name may contain "|".
-tm_r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
-                      capture_output=True, text=True)
+try:
+    tm_r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
+                          capture_output=True, text=True)
+except OSError as e:
+    fail(f"tmux could not be launched: {e}")
 if tm_r.returncode != 0:
     fail(f"tmux failed (rc={tm_r.returncode}): {tm_r.stderr.strip() or 'no server?'}")
 owners = collections.defaultdict(set)   # pid -> {session, ...}; a SET, on purpose
@@ -224,9 +233,12 @@ for line in tm_r.stdout.splitlines():
 # --- read each session's state ONCE, normalised, so classification and
 #     display cannot disagree about what was observed ---
 def read_state(sess):
+    # UnicodeError too: a state file holding invalid UTF-8 raised straight
+    # through OSError-only handling and took the WHOLE report down - and every
+    # session is read eagerly, so an unrelated session's corrupt byte did it.
     try:
         st = open(os.path.join(STATE_DIR, sess)).read().strip()
-    except OSError:
+    except (OSError, UnicodeError):
         return "unknown"
     return st if st in VALID_STATES else "unknown"
 state = {s: read_state(s) for s in sessions}
@@ -259,6 +271,11 @@ for (sess, kind), rows in sorted(groups.items()):
         rec = {"session": sess, "kind": kind, "pid": pid, "state": state[sess],
                "age_h": round(age / 3600, 1), "mb": round(mb, 1), "source": src}
         if len(owners[pid]) > 1:
+            # A shared pid is appended once per owner-group, then de-duped by
+            # pid below. Whichever copy survives, its top-level `state` must
+            # not be one arbitrary owner's - that field is what a consumer
+            # keys on. The per-owner truth lives in `states`.
+            rec["state"] = "shared"
             rec["owners"] = sorted(owners[pid])
             rec["states"] = {o: state[o] for o in owners[pid]}
             shared.append(rec)
@@ -315,7 +332,9 @@ block("surplus", surplus)
 block("working", skipped_working)
 block("unknown", unknown)
 if shared:
-    print(f"{'shared':<12} {'pane':<9}{len(shared):>4} proc(s)  {total_mb(shared):>6} MB  "
+    src = source_of(shared)
+    srcnote = "" if src == "top" else f"  [{src}]"
+    print(f"{'shared':<12} {'pane':<9}{len(shared):>4} proc(s)  {total_mb(shared):>6} MB{srcnote}  "
           f"- under panes linked into more than one session; not attributed")
 print(f"{'':<12} {'TOTAL':<9}{len(surplus):>4} proc(s)  {total_mb(surplus):>6} MB  surplus "
       f"[footprint: {source_of(surplus)}]")
