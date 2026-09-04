@@ -14,35 +14,51 @@
 # cumulative CPU while 10-day-old abandoned ones showed 0.7s. These processes
 # are near-idle even when connected, so CPU cannot tell live from abandoned.
 #
-# WHAT DOES WORK
-# Cardinality. Nobody needs 31 concurrent copies of one MCP server in one
-# session, whatever any single copy is doing. So this bounds the count per
-# (session, server) and retires the OLDEST beyond it, newest-wins — the newest
-# set belongs to the most recent invocation and is the one still wired up.
+# WHY THIS IS REPORT-ONLY
+# It was built to retire surplus servers, and Sol's review killed that on
+# evidence. Two findings, both decisive:
 #
-# It never constrains what an agent may run. It only cleans up after it.
+#   1. Killing a connected stdio server does NOT transparently recover. Codex
+#      0.153.3's reinitialization path handles HTTP session-expiry, not a
+#      terminated stdio subprocess, and its connection manager has no
+#      replace-and-retry branch - calls fail until an explicit reconnect or a
+#      restart. Anthropic reproduced the same class of failure on Claude Code
+#      2.1.233: the server exits, the NEXT call respawns and succeeds, and the
+#      one after that fails "No such tool available".
 #
-# SAFETY (all four must pass before anything is signalled)
-#   1. the session's Falken state is not `working`
-#   2. the process is older than --grace (a fresh spawn is never raced)
-#   3. at least --keep newer siblings of the same kind exist in that session
-#   4. --apply was passed; the default is a dry run
-# Retirement is SIGTERM, never SIGKILL: a stdio server that gets TERM closes its
-# pipe and the client re-spawns on next use. SIGKILL can strand a half-written
-# frame on the client side.
+#   2. "Newest is the live one" is unsound. Main client starts server A;
+#      subagents later start B, C, D and leak them when they finish; the main
+#      client still uses A. Keeping the newest 3 kills A and preserves all
+#      three leaks - exactly inverted.
+#
+# An earlier draft argued the surplus was "abandoned by construction" because
+# each invocation spawns a fresh pair. That inference was wrong: the client
+# spawns a new pair AND retains the old ones. Spawn-per-invocation says nothing
+# about whether the old connections are still referenced.
+#
+# So this measures and reports. Reclaiming the memory means ending the CLIENT
+# (restart the session, resume the conversation), which is a decision for a
+# human looking at these numbers.
 #
 # usage:
-#   falken-reap                 # report only (safe, default)
-#   falken-reap --apply         # actually retire
-#   falken-reap --keep 2        # allow 2 per (session, server)  [default 3]
-#   falken-reap --grace 60      # only touch processes older than 60m [default 30]
+#   falken-reap                 # per-session MCP pile-up report
+#   falken-reap --keep 2        # count surplus past 2 per (session, server) [default 3]
+#   falken-reap --grace 60      # ignore processes younger than 60m [default 30]
 #   falken-reap --json          # machine-readable, for the board
 set -uo pipefail
 
-keep=3; grace=30; apply=0; json=0
+keep=3; grace=30; json=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --apply) apply=1 ;;
+    --apply)
+      # Kept as an explicit error rather than silently ignored: anyone reaching
+      # for it deserves to know WHY it is gone, not to think it worked.
+      printf 'falken-reap: --apply was removed. Killing a connected stdio MCP\n' >&2
+      printf '  server does not recover transparently (Codex 0.153.3 has no\n' >&2
+      printf '  replace-and-retry for a dead stdio child; Claude Code loses the\n' >&2
+      printf '  tools a call later). Reclaim by ending the CLIENT instead:\n' >&2
+      printf '  restart the session and resume the conversation.\n' >&2
+      exit 2 ;;
     --keep)  keep="${2:?--keep needs a number}"; shift ;;
     --grace) grace="${2:?--grace needs minutes}"; shift ;;
     --json)  json=1 ;;
@@ -54,14 +70,25 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-exec python3 - "$keep" "$grace" "$apply" "$json" <<'PY'
-import os, sys, json as J, signal, subprocess, collections
+# `--keep 0` would select every process and a negative value would trigger
+# Python's negative slicing, quietly inverting the whole report.
+case "$keep" in ''|*[!0-9]*) printf 'falken-reap: --keep must be a positive integer\n' >&2; exit 2 ;; esac
+case "$grace" in ''|*[!0-9]*) printf 'falken-reap: --grace must be a non-negative integer\n' >&2; exit 2 ;; esac
+[ "$keep" -ge 1 ] || { printf 'falken-reap: --keep must be >= 1\n' >&2; exit 2; }
 
-KEEP, GRACE_MIN, APPLY, JSON = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "1", sys.argv[4] == "1"
+exec python3 - "$keep" "$grace" "$json" <<'PY'
+import os, sys, json as J, subprocess, collections
+
+KEEP, GRACE_MIN, JSON = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "1"
 STATE_DIR = os.path.expanduser("~/.claude/agent-state")
 
-# Server kinds worth bounding. Matched on the command line because the process
-# name alone is useless here - almost everything reports as `node`.
+# Matched on the command line because the process NAME is useless here: almost
+# everything reports as `node`.
+#
+# CAVEAT, and it matters for reading the output: this counts PROCESSES, not
+# servers. One logical server can be a wrapper plus a vendored child plus
+# workers, all matching the same needle, so a single healthy server can show up
+# as several rows. Treat the numbers as pile-up pressure, not a server census.
 KINDS = (
     ("codex mcp-server",  "codex"),
     ("node_repl",         "node_repl"),
@@ -116,13 +143,26 @@ try:
             v = float(val)
         except ValueError:
             continue
-        FOOT[int(f[0])] = v / 1024 if unit == "K" else v * 1024 if unit == "G" else v
+        # "512B" is 512 BYTES. Treating a bare B as megabytes overstated a
+        # tiny process by six orders of magnitude.
+        scale = {"B": 1 / 1048576, "K": 1 / 1024, "M": 1.0, "G": 1024.0}.get(unit)
+        if scale is None:
+            continue
+        FOOT[int(f[0])] = v * scale
     FOOT_OK = bool(FOOT)
 except Exception:
     FOOT_OK = False
 
+# top -n is a HEAD of the process list, so a candidate outside it silently fell
+# back to RSS while the report still claimed footprint_source=top. Track
+# coverage per candidate and say so.
+MISSED = set()
+
 def mb_of(pid, rss_kb):
-    return FOOT.get(pid, rss_kb / 1024)
+    if pid in FOOT:
+        return FOOT[pid]
+    MISSED.add(pid)
+    return rss_kb / 1024
 
 # --- one ps pass; building the tree by hand beats N pgrep forks ---
 ps = subprocess.run(
@@ -152,19 +192,30 @@ def descendants(root):
     return seen
 
 # --- map every process to the tmux session that owns it ---
+# splitlines(), NOT split(): a session named "work fleet" splits on the space
+# and gets attributed to "fleet", which then reads the WRONG state file.
+# rsplit on the delimiter for the same reason - the name may contain "|".
 panes = subprocess.run(
     ["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
-    capture_output=True, text=True).stdout.split()
-owner = {}
+    capture_output=True, text=True).stdout.splitlines()
+owner, shared = {}, set()
 for line in panes:
+    line = line.strip()
     if "|" not in line:
         continue
-    sess, pane_pid = line.split("|", 1)
+    sess, pane_pid = line.rsplit("|", 1)
     try:
-        for p in descendants(int(pane_pid)):
-            owner[p] = sess
+        pane_pid = int(pane_pid)
     except ValueError:
         continue
+    for pr in descendants(pane_pid):
+        prev = owner.get(pr)
+        if prev is None:
+            owner[pr] = sess
+        elif prev != sess:
+            # A linked/shared pane appears under several sessions. Last-writer
+            # -wins silently misattributed these; flag instead of guessing.
+            shared.add(pr)
 
 def state_of(sess):
     try:
@@ -205,36 +256,34 @@ for (sess, kind), rows in sorted(groups.items()):
                      "age_h": round(age / 3600, 1), "mb": round(mb_of(pid, rss), 1)})
 
 freed = round(sum(p["mb"] for p in plan))
-retired, failed = [], []
-if APPLY:
-    for p in plan:
-        try:
-            os.kill(p["pid"], signal.SIGTERM)
-            retired.append(p["pid"])
-        except ProcessLookupError:
-            retired.append(p["pid"])      # already gone; the outcome we wanted
-        except PermissionError as e:
-            failed.append({"pid": p["pid"], "err": str(e)})
 
 if JSON:
-    print(J.dumps({"keep": KEEP, "grace_min": GRACE_MIN, "applied": APPLY,
-                   "candidates": plan, "skipped_working": skipped,
-                   "reclaimable_mb": freed, "footprint_source": "top" if FOOT_OK else "rss", "retired": retired,
-                   "failed": failed}, indent=2))
+    print(J.dumps({
+        "report_only": True,
+        "keep": KEEP, "grace_min": GRACE_MIN,
+        "surplus": plan, "skipped_working": skipped,
+        "surplus_mb": freed,
+        # per-candidate truth, not a global claim: anything outside top's head
+        # fell back to RSS and is therefore understated.
+        "footprint_source": "top" if FOOT_OK else "rss",
+        "footprint_missed_pids": sorted(MISSED),
+        "shared_pane_pids": sorted(shared),
+        "counts_processes_not_servers": True,
+    }, indent=2))
     sys.exit(0)
 
 if not plan and not skipped:
-    print(f"falken-reap: nothing to retire (keep={KEEP}/kind/session, grace={GRACE_MIN}m)")
+    print(f"falken-reap: no pile-up (keep={KEEP}/kind/session, grace={GRACE_MIN}m)")
     sys.exit(0)
 
 by_sess = collections.defaultdict(list)
 for p in plan:
     by_sess[p["session"]].append(p)
-verb = "RETIRED" if APPLY else "would retire"
+verb = "surplus"
 for sess in sorted(by_sess):
     rows = by_sess[sess]
     mb = round(sum(r["mb"] for r in rows))
-    print(f"{sess:<12} {verb} {len(rows):>3} server(s)  {mb:>6} MB  [{state_of(sess)}]")
+    print(f"{sess:<12} {verb} {len(rows):>3} proc(s)  {mb:>6} MB  [{state_of(sess)}]")
     counts = collections.Counter(r["kind"] for r in rows)
     oldest = max(r["age_h"] for r in rows)
     print("             " + ", ".join(f"{k} x{v}" for k, v in counts.most_common())
@@ -242,9 +291,14 @@ for sess in sorted(by_sess):
 for s in skipped:
     print(f"{s['session']:<12} SKIPPED  {s['surplus']:>3} {s['kind']} "
           f"({s['mb']} MB) - session is {s['state']}")
-note = "" if FOOT_OK else "  [RSS fallback - understates paged-out servers]"
-print(f"{'':<12} {'TOTAL':<7} {len(plan):>3} server(s)  {freed:>6} MB{note}"
-      + ("" if APPLY else "   (dry run - pass --apply)"))
-if failed:
-    print(f"  {len(failed)} could not be signalled: {failed}")
+note = "" if FOOT_OK else "  [RSS fallback - understates paged-out processes]"
+print(f"{'':<12} {'TOTAL':<7} {len(plan):>3} proc(s)  {freed:>6} MB{note}")
+if MISSED:
+    print(f"  note: {len(MISSED)} process(es) fell outside top's window; "
+          f"their size is RSS and therefore understated")
+if shared:
+    print(f"  note: {len(shared)} process(es) sit under panes shared by more than "
+          f"one session; ownership is ambiguous and they are attributed to the first")
+print("  report only. To reclaim: restart the owning session and resume the")
+print("  conversation - killing a connected MCP server loses its tools.")
 PY
