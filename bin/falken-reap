@@ -76,11 +76,12 @@ case "$keep" in ''|*[!0-9]*) printf 'falken-reap: --keep must be a positive inte
 case "$grace" in ''|*[!0-9]*) printf 'falken-reap: --grace must be a non-negative integer\n' >&2; exit 2 ;; esac
 [ "$keep" -ge 1 ] || { printf 'falken-reap: --keep must be >= 1\n' >&2; exit 2; }
 
-exec python3 - "$keep" "$grace" "$json" <<'PY'
+exec python3 - "$keep" "$grace" "$json" <<'PYEOF'
 import os, sys, json as J, subprocess, collections
 
 KEEP, GRACE_MIN, JSON = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "1"
 STATE_DIR = os.path.expanduser("~/.claude/agent-state")
+VALID_STATES = {"working", "needs", "done", "wrapped", "idle"}
 
 # Matched on the command line because the process NAME is useless here: almost
 # everything reports as `node`.
@@ -88,7 +89,9 @@ STATE_DIR = os.path.expanduser("~/.claude/agent-state")
 # CAVEAT, and it matters for reading the output: this counts PROCESSES, not
 # servers. One logical server can be a wrapper plus a vendored child plus
 # workers, all matching the same needle, so a single healthy server can show up
-# as several rows. Treat the numbers as pile-up pressure, not a server census.
+# as several rows and a fresh restart can recreate that exact arrangement.
+# Treat the numbers as "matching processes above a threshold", never as bytes
+# that are wasted or that a restart will recover.
 KINDS = (
     ("codex mcp-server",  "codex"),
     ("node_repl",         "node_repl"),
@@ -122,14 +125,23 @@ def etime_seconds(t):
     h, m, s = bits
     return days * 86400 + h * 3600 + m * 60 + s
 
+def fail(msg, code=3):
+    """Collection failed. This must NEVER look like a healthy empty result: a
+    status bar that turns "ps died" into green is worse than no status bar."""
+    if JSON:
+        print(J.dumps({"ok": False, "report_only": True, "error": msg}))
+    else:
+        print(f"falken-reap: {msg}", file=sys.stderr)
+    sys.exit(code)
+
 # --- real footprint, not RSS ---
 # These servers sit idle for days, so the OS pages them out and `ps rss` reports
-# a fraction of what they actually hold: 248 leaked servers measured 118 MB
-# resident but ~10 GB of footprint, which is precisely why swap was pinned.
-# Reporting RSS would make the win look 80x smaller than it is. One `top` call
-# is the cheapest source of phys_footprint; if it fails we fall back to RSS and
-# say so rather than quietly reporting the wrong number.
-FOOT, FOOT_OK = {}, False
+# a fraction of what they hold: 248 of them measured 118 MB resident against
+# ~5.4 GB of footprint, which is precisely why swap was pinned. One `top` call
+# is the cheapest source of phys_footprint. top -n is a HEAD of the process
+# list, so any candidate outside it falls back to RSS - and the report says
+# which, per row, rather than claiming "top" if any process at all was seen.
+FOOT = {}
 try:
     top = subprocess.run(["top", "-l", "1", "-n", "600", "-stats", "pid,mem"],
                          capture_output=True, text=True, timeout=25).stdout
@@ -143,34 +155,29 @@ try:
             v = float(val)
         except ValueError:
             continue
-        # "512B" is 512 BYTES. Treating a bare B as megabytes overstated a
-        # tiny process by six orders of magnitude.
+        # "512B" is 512 BYTES; a bare B treated as megabytes overstated a tiny
+        # process by six orders of magnitude.
         scale = {"B": 1 / 1048576, "K": 1 / 1024, "M": 1.0, "G": 1024.0}.get(unit)
         if scale is None:
             continue
         FOOT[int(f[0])] = v * scale
-    FOOT_OK = bool(FOOT)
 except Exception:
-    FOOT_OK = False
+    FOOT = {}
 
-# top -n is a HEAD of the process list, so a candidate outside it silently fell
-# back to RSS while the report still claimed footprint_source=top. Track
-# coverage per candidate and say so.
-MISSED = set()
-
-def mb_of(pid, rss_kb):
+def measure(pid, rss_kb):
+    """-> (megabytes, source) so every row carries its own provenance."""
     if pid in FOOT:
-        return FOOT[pid]
-    MISSED.add(pid)
-    return rss_kb / 1024
+        return FOOT[pid], "top"
+    return rss_kb / 1024, "rss"
 
 # --- one ps pass; building the tree by hand beats N pgrep forks ---
-ps = subprocess.run(
-    ["ps", "-Ao", "pid=,ppid=,etime=,rss=,command="],
-    capture_output=True, text=True).stdout
+ps_r = subprocess.run(["ps", "-Ao", "pid=,ppid=,etime=,rss=,command="],
+                      capture_output=True, text=True)
+if ps_r.returncode != 0 or not ps_r.stdout.strip():
+    fail(f"ps failed (rc={ps_r.returncode}): {ps_r.stderr.strip() or 'no output'}")
 kids = collections.defaultdict(list)
 proc = {}
-for line in ps.splitlines():
+for line in ps_r.stdout.splitlines():
     f = line.strip().split(None, 4)
     if len(f) < 5:
         continue
@@ -191,15 +198,17 @@ def descendants(root):
         stack.extend(kids.get(p, []))
     return seen
 
-# --- map every process to the tmux session that owns it ---
+# --- map every process to the tmux session(s) that own it ---
 # splitlines(), NOT split(): a session named "work fleet" splits on the space
 # and gets attributed to "fleet", which then reads the WRONG state file.
 # rsplit on the delimiter for the same reason - the name may contain "|".
-panes = subprocess.run(
-    ["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
-    capture_output=True, text=True).stdout.splitlines()
-owner, shared = {}, set()
-for line in panes:
+tm_r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_pid}"],
+                      capture_output=True, text=True)
+if tm_r.returncode != 0:
+    fail(f"tmux failed (rc={tm_r.returncode}): {tm_r.stderr.strip() or 'no server?'}")
+owners = collections.defaultdict(set)   # pid -> {session, ...}; a SET, on purpose
+sessions = set()
+for line in tm_r.stdout.splitlines():
     line = line.strip()
     if "|" not in line:
         continue
@@ -208,97 +217,111 @@ for line in panes:
         pane_pid = int(pane_pid)
     except ValueError:
         continue
+    sessions.add(sess)
     for pr in descendants(pane_pid):
-        prev = owner.get(pr)
-        if prev is None:
-            owner[pr] = sess
-        elif prev != sess:
-            # A linked/shared pane appears under several sessions. Last-writer
-            # -wins silently misattributed these; flag instead of guessing.
-            shared.add(pr)
+        owners[pr].add(sess)
 
-def state_of(sess):
+# --- read each session's state ONCE, normalised, so classification and
+#     display cannot disagree about what was observed ---
+def read_state(sess):
     try:
-        return open(os.path.join(STATE_DIR, sess)).read().strip()
+        st = open(os.path.join(STATE_DIR, sess)).read().strip()
     except OSError:
         return "unknown"
+    return st if st in VALID_STATES else "unknown"
+state = {s: read_state(s) for s in sessions}
 
-# --- group: (session, kind) -> [processes], newest first ---
+# --- group: (session, kind) -> rows, then classify ---
 groups = collections.defaultdict(list)
 for pid, p in proc.items():
     k = kind_of(p["cmd"])
     if not k:
         continue
-    sess = owner.get(pid)
-    if not sess:
-        continue          # not in the fleet; not ours to manage
-    groups[(sess, k)].append((p["age"], pid, p["rss"]))
+    own = owners.get(pid)
+    if not own:
+        continue                      # not in the fleet; not ours to report on
+    for sess in own:                  # a shared pane lands in EVERY owner's group
+        groups[(sess, k)].append((p["age"], pid, p["rss"]))
 
 grace_s = GRACE_MIN * 60
-plan, skipped = [], []
+# Four buckets. Only `surplus` is a restart candidate; the others exist so an
+# ambiguous or unknowable measurement is never quietly folded into it.
+surplus, skipped_working, unknown, shared = [], [], [], []
 for (sess, kind), rows in sorted(groups.items()):
-    rows.sort()                       # youngest first: age ascending
-    st = state_of(sess)
-    surplus = rows[KEEP:]             # everything past the newest KEEP
-    if not surplus:
-        continue
-    if st == "working":
-        # Mid-turn. A retire here could pull a server out from under a live
-        # call, and the win is only memory - it can wait for the next sweep.
-        skipped.append({"session": sess, "kind": kind, "state": st,
-                        "surplus": len(surplus),
-                        "mb": round(sum(mb_of(r[1], r[2]) for r in surplus))})
-        continue
-    for age, pid, rss in surplus:
-        if age < grace_s:
-            continue
-        plan.append({"session": sess, "kind": kind, "pid": pid,
-                     "age_h": round(age / 3600, 1), "mb": round(mb_of(pid, rss), 1)})
+    rows.sort()                       # youngest first
+    # Grace applies BEFORE classification, identically for every bucket. An
+    # earlier draft applied it only to the non-working branch, so the same
+    # four one-second-old processes were "surplus" in one state and nothing
+    # in another.
+    aged = [(a, pid, rss) for (a, pid, rss) in rows[KEEP:] if a >= grace_s]
+    for age, pid, rss in aged:
+        mb, src = measure(pid, rss)
+        rec = {"session": sess, "kind": kind, "pid": pid, "state": state[sess],
+               "age_h": round(age / 3600, 1), "mb": round(mb, 1), "source": src}
+        if len(owners[pid]) > 1:
+            rec["owners"] = sorted(owners[pid])
+            rec["states"] = {o: state[o] for o in owners[pid]}
+            shared.append(rec)
+        elif state[sess] == "working":
+            skipped_working.append(rec)
+        elif state[sess] == "unknown":
+            unknown.append(rec)
+        else:
+            surplus.append(rec)
 
-freed = round(sum(p["mb"] for p in plan))
+# de-dupe shared rows: one per pid, since it was appended under each owner
+_seen = set()
+shared = [r for r in shared if not (r["pid"] in _seen or _seen.add(r["pid"]))]
+
+def source_of(rows):
+    srcs = {r["source"] for r in rows}
+    return "none" if not srcs else "mixed" if len(srcs) > 1 else srcs.pop()
+
+def total_mb(rows):
+    return round(sum(r["mb"] for r in rows))
 
 if JSON:
     print(J.dumps({
-        "report_only": True,
+        "ok": True, "report_only": True,
         "keep": KEEP, "grace_min": GRACE_MIN,
-        "surplus": plan, "skipped_working": skipped,
-        "surplus_mb": freed,
-        # per-candidate truth, not a global claim: anything outside top's head
-        # fell back to RSS and is therefore understated.
-        "footprint_source": "top" if FOOT_OK else "rss",
-        "footprint_missed_pids": sorted(MISSED),
-        "shared_pane_pids": sorted(shared),
+        "surplus": surplus, "surplus_mb": total_mb(surplus),
+        "surplus_footprint_source": source_of(surplus),
+        "skipped_working": skipped_working,
+        "unknown_state": unknown,
+        "shared_pane": shared,
         "counts_processes_not_servers": True,
     }, indent=2))
     sys.exit(0)
 
-if not plan and not skipped:
+if not (surplus or skipped_working or unknown or shared):
     print(f"falken-reap: no pile-up (keep={KEEP}/kind/session, grace={GRACE_MIN}m)")
     sys.exit(0)
 
-by_sess = collections.defaultdict(list)
-for p in plan:
-    by_sess[p["session"]].append(p)
-verb = "surplus"
-for sess in sorted(by_sess):
-    rows = by_sess[sess]
-    mb = round(sum(r["mb"] for r in rows))
-    print(f"{sess:<12} {verb} {len(rows):>3} proc(s)  {mb:>6} MB  [{state_of(sess)}]")
-    counts = collections.Counter(r["kind"] for r in rows)
-    oldest = max(r["age_h"] for r in rows)
-    print("             " + ", ".join(f"{k} x{v}" for k, v in counts.most_common())
-          + f"   (oldest {oldest}h)")
-for s in skipped:
-    print(f"{s['session']:<12} SKIPPED  {s['surplus']:>3} {s['kind']} "
-          f"({s['mb']} MB) - session is {s['state']}")
-note = "" if FOOT_OK else "  [RSS fallback - understates paged-out processes]"
-print(f"{'':<12} {'TOTAL':<7} {len(plan):>3} proc(s)  {freed:>6} MB{note}")
-if MISSED:
-    print(f"  note: {len(MISSED)} process(es) fell outside top's window; "
-          f"their size is RSS and therefore understated")
+def block(label, rows):
+    by = collections.defaultdict(list)
+    for r in rows:
+        by[r["session"]].append(r)
+    for sess in sorted(by):
+        rs = by[sess]
+        kinds = collections.Counter(r["kind"] for r in rs)
+        src = source_of(rs)
+        srcnote = "" if src == "top" else f"  [{src}]"
+        print(f"{sess:<12} {label:<9}{len(rs):>4} proc(s)  {total_mb(rs):>6} MB  "
+              f"[{rs[0]['state']}]{srcnote}")
+        print("             " + ", ".join(f"{k} x{v}" for k, v in kinds.most_common())
+              + f"   (oldest {max(r['age_h'] for r in rs)}h)")
+
+block("surplus", surplus)
+block("working", skipped_working)
+block("unknown", unknown)
 if shared:
-    print(f"  note: {len(shared)} process(es) sit under panes shared by more than "
-          f"one session; ownership is ambiguous and they are attributed to the first")
-print("  report only. To reclaim: restart the owning session and resume the")
-print("  conversation - killing a connected MCP server loses its tools.")
-PY
+    print(f"{'shared':<12} {'pane':<9}{len(shared):>4} proc(s)  {total_mb(shared):>6} MB  "
+          f"- under panes linked into more than one session; not attributed")
+print(f"{'':<12} {'TOTAL':<9}{len(surplus):>4} proc(s)  {total_mb(surplus):>6} MB  surplus "
+      f"[footprint: {source_of(surplus)}]")
+print("  Counts are matching PROCESSES above --keep, not servers: a wrapper, its")
+print("  child and its workers all match one needle, and a restart can recreate")
+print("  exactly that. `wrapped` is a board label, not proof of inactivity.")
+print("  Report only. Nothing here is killed: a connected MCP server that dies")
+print("  loses its tools. Reclaim by restarting the session and resuming.")
+PYEOF
