@@ -23,9 +23,9 @@ if [ "$mode" = clear ]; then
   # un-wrap to `working` (NOT `done`): a wrapped session may hide a red tree, so the next Stop
   # must RE-VERIFY before it is allowed to show ✓. Clear BOTH gate-scratch files keyed by $sess
   # (the red marker AND the retry counter) so the promised re-verify actually starts from scratch.
-  echo working > "$dir/$sess"
+  "$(dirname "$0")/tmux-state-sync" --write-state "$sess" working || exit 1
   rm -f "$HOME/.claude/falken/verify-red/$sess" "$HOME/.claude/falken/verify-tries/$sess" 2>/dev/null
   msg="un-wrapped (re-verifies on next stop): $sess"
-else echo wrapped > "$dir/$sess"; msg="parked (wrapped): $sess"; fi
+else "$(dirname "$0")/tmux-state-sync" --write-state "$sess" wrapped || exit 1; msg="parked (wrapped): $sess"; fi
 if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ]; then tmux display-message "$msg" 2>/dev/null; fi
 echo "$msg"

@@ -6,6 +6,7 @@
     "tier": "prototype"
   },
   "scripts": {
-    "lint": "for f in bin/*; do if head -1 \"$f\" | grep -q bash; then bash -n \"$f\" || exit 1; fi; done"
+    "lint": "for f in bin/*; do if head -1 \"$f\" | grep -q bash; then bash -n \"$f\" || exit 1; fi; done",
+    "test": "python3 -m unittest discover -s tests -v"
   }
 }

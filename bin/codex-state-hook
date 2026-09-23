@@ -44,6 +44,12 @@ verifying_file="$verifying_dir/$safe_sess"
 open_tools="$tool_dir/$safe_sess"
 cap=3
 
+state_write() {
+  # Serialize with state-sync's capacity-error reconciliation. A failure must
+  # leave the last known state intact, never fall back to an unlocked write.
+  "$(dirname "$0")/tmux-state-sync" --write-state "$sess" "$1"
+}
+
 tool_open() {
   mkdir -p "$open_tools" 2>/dev/null || return 0
   : > "$open_tools/$(date +%s)-$$-${RANDOM}" 2>/dev/null || true
@@ -65,25 +71,25 @@ fi
 
 case "$ev" in
   SessionStart)
-    echo idle > "$state_file"; tool_clear ;;
+    state_write idle; tool_clear ;;
   UserPromptSubmit)
-    echo working > "$state_file"
+    state_write working
     rm -f "$tries_file" "$red_file" 2>/dev/null; tool_clear ;;
   PreToolUse)
     tool_name=$(field tool_name)
     # Mark Codex's interactive-question tool as needs before it waits.
     case "$tool_name" in
-      request_user_input|AskUserQuestion) echo needs > "$state_file" ;;
-      *) echo working > "$state_file"; tool_open ;;
+      request_user_input|AskUserQuestion) state_write needs ;;
+      *) state_write working; tool_open ;;
     esac ;;
   PostToolUse)
     tool_name=$(field tool_name)
     case "$tool_name" in
-      request_user_input|AskUserQuestion) echo working > "$state_file" ;;
+      request_user_input|AskUserQuestion) state_write working ;;
       *) tool_close ;;
     esac ;;
   PermissionRequest)
-    echo needs > "$state_file" ;;
+    state_write needs ;;
   Stop)
     tool_clear
     cwd=$(field cwd)
@@ -100,7 +106,7 @@ try: d=json.load(open(sys.argv[1]))
 except Exception: print("0"); sys.exit(0)
 print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json" 2>/dev/null)
     fi
-    if [ "$gated" != 1 ]; then echo done > "$state_file"; exit 0; fi
+    if [ "$gated" != 1 ]; then state_write done; exit 0; fi
 
     stop_active=$(field stop_hook_active)
     n=$(cat "$tries_file" 2>/dev/null)
@@ -108,12 +114,12 @@ print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json
     n=$((n + 1))
     if ! printf '%s\n' "$n" > "$tries_file" 2>/dev/null \
        || [ "$(cat "$tries_file" 2>/dev/null)" != "$n" ]; then
-      echo needs > "$state_file"
+      state_write needs
       printf 'falken gate: could not safely record retry state; surfacing as needs.\n' >&2
       exit 0
     fi
     if [ "$stop_active" = 1 ] && [ "$n" -le 1 ]; then
-      rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+      rm -f "$tries_file" 2>/dev/null; state_write needs
       printf 'falken gate: continuation state was lost; surfacing as needs.\n' >&2
       exit 0
     fi
@@ -122,7 +128,7 @@ print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json
     [ -x "$verifier" ] || verifier="$HOME/bin/falken-verify"
     [ -x "$verifier" ] || verifier="$HOME/bnjmn/falken/bin/falken-verify"
     if [ ! -x "$verifier" ]; then
-      rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+      rm -f "$tries_file" 2>/dev/null; state_write needs
       printf 'falken gate: falken-verify is missing; surfacing as needs.\n' >&2
       exit 0
     fi
@@ -136,27 +142,28 @@ print("1" if isinstance(d,dict) and "falken" in d else "0")' "$root/package.json
     case "$rc" in
       0)
         rm -f "$tries_file" "$red_file" 2>/dev/null
-        echo done > "$state_file"; exit 0 ;;
+        state_write done; exit 0 ;;
       2|3)
-        rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+        rm -f "$tries_file" 2>/dev/null; state_write needs
         printf '%s\n' "$output" | tail -c 2048 >&2
         printf '\n--- falken gate: verification could not run honestly; surfacing as needs. ---\n' >&2
         exit 0 ;;
       *)
         printf 'verify red (attempt %s/%s)\n' "$n" "$cap" > "$red_file"
         if [ "$n" -ge "$cap" ]; then
-          rm -f "$tries_file" 2>/dev/null; echo needs > "$state_file"
+          rm -f "$tries_file" 2>/dev/null; state_write needs
           printf '%s\n' "$output" | tail -c 2048 >&2
           printf '\n--- falken gate: verify still RED after %s attempts; surfacing as needs. ---\n' "$n" >&2
           exit 0
         fi
-        echo working > "$state_file"
+        state_write working
         printf '%s\n' "$output" | tail -c 4096 >&2
         printf '\n--- falken gate: verify RED (attempt %s/%s). Fix it, then finish; the gate re-checks on stop. ---\n' "$n" "$cap" >&2
         exit 2 ;;
     esac ;;
   SessionEnd)
-    rm -f "$state_file" "$tries_file" "$red_file" "$verifying_file" 2>/dev/null
+    "$(dirname "$0")/tmux-state-sync" --remove-state "$sess"
+    rm -f "$tries_file" "$red_file" "$verifying_file" 2>/dev/null
     tool_clear ;;
 esac
 exit 0

@@ -1,30 +1,189 @@
-#!/usr/bin/env bash
-# tmux-state-sync — keep ~/.claude/agent-state aligned with live tmux sessions:
-#   (1) seed a default 'idle' for any live session with no state file (complete inventory),
-#   (2) prune state files whose session no longer exists (stops a stale ✋ pulsing the dot).
-# Idempotent, safe to call every status refresh. Prints nothing.
-# PERF: one tmux call + one python pass (was a per-file basename fork loop).
-live=$(tmux list-sessions -F '#{session_name}' 2>/dev/null)
-[ -n "$live" ] || exit 0                 # tmux not responding → do nothing (never mass-prune)
-FALKEN_LIVE="$live" exec python3 <<'PY'
+#!/usr/bin/env python3
+"""Seed/prune the board and reconcile a missed Codex capacity-failure hook.
+
+Only a terminal capacity error immediately followed by Codex's empty prompt
+qualifies. Never infer completion or inactivity from elapsed time or CPU usage.
+"""
+import contextlib
+import fcntl
+import hashlib
 import os
-d = os.path.expanduser("~/.claude/agent-state")
-os.makedirs(d, exist_ok=True)
-live = set(os.environ.get("FALKEN_LIVE", "").split())
-for s in live:                           # seed idle for untracked live sessions (never clobbers real state)
-    p = os.path.join(d, s)
-    if not os.path.exists(p):
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+STATE = Path.home() / '.claude/agent-state'
+SCRATCH = Path.home() / '.falken/codex'
+CAPACITY = '⚠ Selected model is at capacity. Please try a different model.'
+
+
+@contextlib.contextmanager
+def state_lock(session):
+    directory = SCRATCH / 'state-locks'
+    directory.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(session.encode()).hexdigest()
+    with (directory / key).open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def write_state(session, value):
+    # This entry point is also used by the Codex hook, so a late observation
+    # cannot overwrite a newer prompt, stop, or permission event.
+    if not session or '/' in session or session in ('.', '..'):
+        raise ValueError('invalid session name')
+    if value not in (None, 'idle', 'working', 'needs', 'done', 'wrapped'):
+        raise ValueError('invalid state')
+    STATE.mkdir(parents=True, exist_ok=True)
+    with state_lock(session):
+        if value is None:
+            (STATE / session).unlink(missing_ok=True)
+        else:
+            (STATE / session).write_text(value + '\n')
+
+
+def read_command(*args):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=1,
+                                errors='replace')
+        return result.stdout if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def snapshot(path):
+    stat = path.stat()
+    return (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+
+def capacity_prompt(text):
+    # Preserve indentation: quoted errors/tool output are not terminal warnings.
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    return (len(lines) >= 3 and lines[-3] == CAPACITY
+            and lines[-2] == '› Ask Codex to do anything'
+            and re.fullmatch(r'  gpt-\S+ .*', lines[-1]) is not None)
+
+
+def is_codex(pane_pid, processes):
+    descendants = {pane_pid}
+    while True:
+        new = {pid for pid, (parent, _) in processes.items()
+               if parent in descendants} - descendants
+        if not new:
+            break
+        descendants.update(new)
+    return any(Path(processes[pid][1]).name == 'codex'
+               for pid in descendants if pid in processes)
+
+
+def reconcile(live):
+    candidates = {}
+    for session in live:
         try:
-            open(p, "x").write("idle")
+            path = STATE / session
+            before = snapshot(path)
+            if path.read_text().strip() == 'working' and time.time() - before[1] / 1e9 >= 10:
+                candidates[session] = before
         except OSError:
             pass
-try:                                     # prune files for dead sessions
-    for name in os.listdir(d):
-        if name not in live:
+    if not candidates:
+        return
+
+    # Status refresh can run once per client per second. Keep the process/pane
+    # reads bounded to one pass every five seconds, across all clients.
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    with (SCRATCH / 'reconcile-check').open('a+') as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        guard.seek(0)
+        try:
+            last = float(guard.read())
+        except ValueError:
+            last = 0
+        if 0 <= time.time() - last < 5:
+            return
+        guard.seek(0)
+        guard.truncate()
+        guard.write(str(time.time()))
+        guard.flush()
+        panes_text = read_command('tmux', 'list-panes', '-a', '-F',
+                                  '#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_in_mode}\t#{pane_current_command}')
+        if panes_text is None:
+            return
+        panes = {}
+        for line in panes_text.splitlines():
+            fields = line.split('\t')
+            if len(fields) == 5:
+                panes.setdefault(fields[0], []).append(fields[1:])
+        process_text = read_command('ps', '-axo', 'pid=,ppid=,comm=')
+        if process_text is None:
+            return
+        processes = {}
+        for line in process_text.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+                processes[int(fields[0])] = (int(fields[1]), fields[2])
+        for session, before in candidates.items():
+            session_panes = panes.get(session, [])
+            if len(session_panes) != 1:
+                continue  # Do not demote work in a different pane.
+            pane, pid, in_mode, command = session_panes[0]
+            if in_mode != '0' or command not in ('node', 'codex') or not pid.isdigit():
+                continue
+            if not is_codex(int(pid), processes):
+                continue
+            text = read_command('tmux', 'capture-pane', '-p', '-t', pane)
+            if text is None or not capacity_prompt(text):
+                continue
+            path = STATE / session
             try:
-                os.remove(os.path.join(d, name))
+                with state_lock(session):
+                    if snapshot(path) == before and path.read_text().strip() == 'working':
+                        path.write_text('needs\n')
             except OSError:
                 pass
-except OSError:
-    pass
-PY
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--remove-state':
+        write_state(sys.argv[2], None)
+        return
+    if len(sys.argv) == 4 and sys.argv[1] == '--write-state':
+        write_state(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) != 1:
+        raise ValueError('usage: tmux-state-sync [--write-state SESSION STATE]')
+    output = read_command('tmux', 'list-sessions', '-F', '#{session_name}')
+    if not output:
+        return  # A failed inventory must never prune the board.
+    live = {name for name in output.splitlines() if name and '/' not in name
+            and name not in ('.', '..')}
+    if not live:
+        return
+    STATE.mkdir(parents=True, exist_ok=True)
+    for session in live:
+        try:
+            with (STATE / session).open('x') as file:
+                file.write('idle')
+        except FileExistsError:
+            pass
+    for path in STATE.iterdir():
+        if path.name not in live:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    reconcile(live)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError):
+        # Status rendering must remain usable if state storage is unavailable.
+        if len(sys.argv) > 1:
+            sys.exit(1)
