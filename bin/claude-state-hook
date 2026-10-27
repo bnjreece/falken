@@ -83,8 +83,10 @@ tool_depth() {
 
 # --- background-work badge --------------------------------------------------------------
 # Claude Code renders status-bar badges ("· 1 shell", "· 2 background tasks", "· 1 MCP task
-# still running", "· 1 workflow") ONLY while such background work is running; they vanish the
-# moment it completes (verified: absent on idle panes). This is the clean signal the
+# still running", "· 1 workflow", "· 1 monitor") ONLY while such background work is running; they vanish the
+# moment it completes (verified: absent on idle panes). `monitor` added 2026-10-27: a
+# session waiting on a Monitor watch read `done` because the badge list predated it. The
+# "← N agent" badge is NOT background work (it shows on idle sessions too) and is not matched. This is the clean signal the
 # 2026-07-21 investigation (FALKEN.md backlog) said did not exist -- it ships with newer CC.
 # The leading middle-dot anchors the match to badge syntax, so ordinary prose in a captured
 # line ("I started 2 background tasks") cannot match. Consulted by BOTH turn-end writers
@@ -105,9 +107,9 @@ bg_badge() {
   local last
   last=$(printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -1)
   printf '%s\n' "$last" \
-    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?)( still running)?( ·|$)' && return 0
+    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?|monitors?)( still running)?( ·|$)' && return 0
   printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -3 \
-    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?) still running$' && return 0
+    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?|monitors?) still running$' && return 0
   return 1
 }
 
