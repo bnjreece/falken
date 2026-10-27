@@ -81,6 +81,26 @@ tool_depth() {
   case "$n" in ''|*[!0-9]*) echo 1 ;; *) echo "$n" ;; esac
 }
 
+# --- background tasks from the Stop payload (authoritative) ------------------------------
+# Claude Code's Stop (and SubagentStop) input carries `background_tasks`: one entry per
+# in-flight task (shell, monitor, workflow, subagent, MCP task, ...), and an empty array when
+# nothing is in flight. This is the clean signal the 2026-07-21 investigation (FALKEN.md) asked
+# for; it covers what the badge scrape cannot see reliably (a running workflow may put nothing in
+# the mode bar, saved-script and resumed workflows). Prints the entry count, or nothing when the
+# field is absent (older Claude Code, registry unreachable) or unparseable, in which case the
+# caller falls back to the badge scrape. `session_crons` is deliberately ignored: a scheduled
+# wakeup is not work in flight, and a session idling until its next /loop tick is `done`.
+bg_task_count() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  printf '%s' "$payload" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+bt=d.get("background_tasks") if isinstance(d,dict) else None
+if isinstance(bt,list): print(len(bt))' 2>/dev/null
+}
+
 # --- background-work badge --------------------------------------------------------------
 # Claude Code renders status-bar badges ("· 1 shell", "· 2 background tasks", "· 1 MCP task
 # still running", "· 1 workflow", "· 1 monitor") ONLY while such background work is running; they vanish the
@@ -97,18 +117,41 @@ bg_badge() {
   local pane
   pane=$(tmux capture-pane -t "$TMUX_PANE" -p 2>/dev/null) || return 2
   [ -n "$pane" ] || return 2
-  # Structural line rules, not just a substring: (1) the two-sided delimited badge form is
-  # accepted ONLY on the last non-empty line — that line is always the TUI bottom bar (the
-  # mode/badge chrome), never assistant prose, so "Summary · 2 background tasks · completed"
-  # in a message body cannot match; (2) elsewhere in the last 3 lines, only the spinner form,
-  # which ends in the literal "still running" AND carries the middle-dot count prefix — prose
-  # would have to reproduce "· N <badge> still running" verbatim at end-of-line, at which
-  # point a brief `working` over-report is the safe direction anyway.
-  local last
-  last=$(printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -1)
-  printf '%s\n' "$last" \
-    | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?|monitors?)( still running)?( ·|$)' && return 0
-  printf '%s\n' "$pane" | grep -v '^[[:space:]]*$' | tail -3 \
+  # Structural line rules, not just a substring: (1) the delimited badge form is accepted ONLY
+  # in the TUI chrome, i.e. the lines below the INPUT BOX. The input box is positively
+  # identified: a block between two borders whose first line starts with the prompt ("❯", or
+  # "!" in shell mode, then a space or end of line: tmux trims the space after an empty
+  # prompt). A border starts at column 0 with a run of ten or more "─" (it may carry a label
+  # after the run); a draft line such as "  ─ heading" inside the box is not one. A
+  # rule alone is not enough — permission dialogs draw rules too, and their body can quote
+  # badge-looking text. Assistant prose sits above the box, so "Summary · 2 background tasks ·
+  # completed" in a message body cannot match. Any rule AFTER the box (a dialog) voids the
+  # chrome. The chrome can be more than one line: a running workflow adds a progress row under
+  # the mode bar (2026-10-27), so "last non-empty line" alone missed the badge. With no input
+  # box on screen, fall back to the last non-empty line. Badges may share one slot,
+  # comma-joined ("· 1 shell, 1 monitor ·"); the pattern accepts a comma ONLY between badge
+  # items, so the whole "·"-delimited segment must be a badge list. (2) Elsewhere in the last 3
+  # lines, only the spinner form, which ends in the literal "still running" AND carries the
+  # middle-dot count prefix — prose would have to reproduce "· N <badge> still running"
+  # verbatim at end-of-line, at which point a brief `working` over-report is the safe
+  # direction anyway.
+  local lines chrome
+  lines=$(printf '%s\n' "$pane" | grep -v '^[[:space:]]*$')
+  chrome=$(printf '%s\n' "$lines" | awk '
+    /^──────────/ {                      # a border: closes the input box, or voids the chrome
+      if (inbox) { found = 1; buf = "" } else { found = 0 }
+      inbox = 0; first = 1; next
+    }
+    {
+      if (first) { inbox = ($0 ~ /^(❯|!)( |$)/); first = 0 }
+      if (found) buf = buf $0 "\n"
+    }
+    END { if (found) printf "%s", buf }')
+  [ -n "$chrome" ] || chrome=$(printf '%s\n' "$lines" | tail -1)
+  local kind='[0-9]+ (shells?|MCP tasks?|background tasks?|workflows?|monitors?)'
+  printf '%s\n' "$chrome" \
+    | grep -qE "· $kind(, $kind)*( still running)?( ·|\$)" && return 0
+  printf '%s\n' "$lines" | tail -3 \
     | grep -qE '· [0-9]+ (shells?|MCP tasks?|background tasks?|workflows?|monitors?) still running$' && return 0
   return 1
 }
@@ -195,7 +238,12 @@ case "$ev" in
     # The idle-Notification demote makes the SAME bg_badge check, so the two parallel writers
     # cannot disagree into a false green. The verify gate is DEFERRED to the final stop (no
     # pending work), so it checks the finished tree; the re-wake's Stop re-enters this branch.
-    bg_badge; bgrc=$?
+    nbg=$(bg_task_count)
+    case "$nbg" in
+      '') bg_badge; bgrc=$? ;;                  # no payload list -> scrape the badge (fallback)
+      0)  bgrc=1 ;;                             # payload says nothing in flight
+      *)  bgrc=0 ;;                             # payload lists in-flight work
+    esac
     if [ "$bgrc" = "0" ] || { [ "$bgrc" = "2" ] && [ "$(tool_depth)" -gt 0 ]; }; then
       # Persistent seal FIRST: the parallel Notification writer honors it even if the badge
       # vanishes right after this snapshot. If the seal cannot be written AND read back, fall
